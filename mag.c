@@ -936,6 +936,7 @@ static struct recipe *parse_pkgsrc(const char *id, const char *dir, const char *
         steps = xmalloc(cap + strlen(cfg) + strlen(mflags) + strlen(menv) + strlen(cenv) + 1024);
         steps[0] = 0;
         cmd = steps;
+        cmd += sprintf(cmd, "export BSD_INSTALL_PROGRAM='install -m 755' BSD_INSTALL_PROGRAM_DIR='install -d -m 755' BSD_INSTALL_SCRIPT='install -m 755' BSD_INSTALL_SCRIPT_DIR='install -d -m 755' BSD_INSTALL_LIB='install -m 755' BSD_INSTALL_LIB_DIR='install -d -m 755' BSD_INSTALL_DATA='install -m 644' BSD_INSTALL_DATA_DIR='install -d -m 755' BSD_INSTALL_MAN='install -m 644' BSD_INSTALL_MAN_DIR='install -d -m 755'\n");
         if (!var_get(&vs, "TARGET.do-extract")) cmd += sprintf(cmd, "ln -sfn src \"$SRC/../%s\"\n", distname);
         if (wrksrc && strstr(wrksrc, "/") ) {
             char *rel = strstr(wrksrc, distname);
