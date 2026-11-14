@@ -1,0 +1,5 @@
+desc: libtool for the Makefiles of pkgsrc: compile, link and install shared and static libraries
+version: 1.0
+deps:
+steps:
+	install -Dm755 $RECIPE_DIR/libtool $DESTDIR$PREFIX/bin/libtool

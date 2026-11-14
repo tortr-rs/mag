@@ -1,0 +1,219 @@
+#!/bin/sh
+# libtool: compile, link and install shared and static libraries, for the Makefiles of pkgsrc
+# libtool [--tag=TAG] --mode=compile|link|install|finish|clean|uninstall|execute COMMAND...
+
+cc_cmd=
+mode=
+while [ $# -gt 0 ]; do
+	case $1 in
+	--mode=*) mode=${1#--mode=};;
+	--tag=*|--quiet|--silent|--no-quiet|--no-silent|--debug|--dry-run) ;;
+	--version) echo "libtool (chamesle) 2.4.7"; exit 0;;
+	--features) echo "enable shared libraries"; echo "enable static libraries"; exit 0;;
+	--config) exit 0;;
+	*) break;;
+	esac
+	shift
+done
+[ -n "$mode" ] || { echo "libtool: no --mode" >&2; exit 1; }
+
+run() { [ -n "$LIBTOOL_VERBOSE" ] && echo "$*" >&2; "$@"; }
+
+compile() {
+	out= src= static=no
+	args=
+	while [ $# -gt 0 ]; do
+		case $1 in
+		-o) out=$2; shift;;
+		-static) static=yes;;
+		-shared|-prefer-pic|-prefer-non-pic|-no-suppress) ;;
+		-Wc,*) args="$args ${1#-Wc,}";;
+		-c) ;;
+		*.c|*.cc|*.cpp|*.cxx|*.S|*.s|*.m) src=$1; args="$args $1";;
+		*) args="$args $1";;
+		esac
+		shift
+	done
+	[ -n "$out" ] || { b=${src##*/}; out=${b%.*}.lo; }
+	base=${out%.lo}
+	d=${base%/*}; [ "$d" = "$base" ] && d=.
+	n=${base##*/}
+	case $out in
+	*.lo)
+		mkdir -p "$d/.libs"
+		set -f
+		# shellcheck disable=SC2086
+		run $cc_cmd -c $args -o "$d/$n.o" || exit $?
+		cat > "$out" <<LO
+# libtool object
+pic_object='.libs/$n.o'
+non_pic_object='$n.o'
+LO
+		if [ $static = no ]; then
+			run $cc_cmd -c -fPIC -DPIC $args -o "$d/.libs/$n.o" || exit $?
+		else
+			echo "pic_object=none" >> "$out"
+		fi
+		;;
+	*) set -f; run $cc_cmd -c $args -o "$out" || exit $? ;;
+	esac
+}
+
+la_get() { sed -n "s/^$2='\(.*\)'\$/\1/p" "$1"; }
+
+link() {
+	out= rpath= vinfo= release= avoid=no module=no static=no
+	objs= pic= libs= flags= la_deps= dlibs=
+	while [ $# -gt 0 ]; do
+		case $1 in
+		-o) out=$2; shift;;
+		-rpath) rpath=$2; shift;;
+		-R) shift;;
+		-version-info) vinfo=$2; shift;;
+		-version-number) vinfo=$2; shift;;
+		-release) release=$2; shift;;
+		-avoid-version) avoid=yes;;
+		-module) module=yes;;
+		-static|-all-static) static=yes;;
+		-shared|-no-undefined|-export-dynamic|-prefer-pic|-prefer-non-pic|-no-install|-dlopen|-dlpreopen|-allow-undefined) ;;
+		-export-symbols|-export-symbols-regex) shift;;
+		-Wc,*) flags="$flags ${1#-Wc,}";;
+		*.lo)
+			d=${1%/*}; [ "$d" = "$1" ] && d=.
+			p=$(la_get "$1" pic_object); np=$(la_get "$1" non_pic_object)
+			[ -n "$np" ] && objs="$objs $d/$np"
+			[ -n "$p" ] && [ "$p" != none ] && pic="$pic $d/$p"
+			;;
+		*.la)
+			d=${1%/*}; [ "$d" = "$1" ] && d=.
+			names=$(la_get "$1" library_names); old=$(la_get "$1" old_library)
+			ldir=$(la_get "$1" libdir); deps=$(la_get "$1" dependency_libs)
+			set -f
+			first=${names%% *}
+			if [ -n "$first" ] && [ -e "$d/.libs/$first" ]; then
+				libs="$libs $d/.libs/$first"
+				[ -n "$ldir" ] && flags="$flags -Wl,-rpath,$ldir"
+			elif [ -n "$old" ]; then libs="$libs $d/.libs/$old"
+			fi
+			la_deps="$la_deps $deps"
+			;;
+		*.o|*.a|*.so|*.so.*) objs="$objs $1"; pic="$pic $1";;
+		-l*) flags="$flags $1"; dlibs="$dlibs $1";;
+		-L*|-Wl,*|-pthread|-f*|-m*|-O*|-g|-s|-z|-B*|-W*|-isystem|--*|-nostdlib|-static-libgcc) flags="$flags $1";;
+		*) flags="$flags $1";;
+		esac
+		shift
+	done
+	[ -n "$out" ] || { echo "libtool: link: no -o" >&2; exit 1; }
+	set -f
+	dir=${out%/*}; [ "$dir" = "$out" ] && dir=.
+	name=${out##*/}
+	case $name in
+	*.la)
+		mkdir -p "$dir/.libs"
+		stem=${name%.la}
+		if [ -z "$rpath" ]; then
+			rm -f "$dir/.libs/$stem.a"
+			run ar cr "$dir/.libs/$stem.a" $pic && run ranlib "$dir/.libs/$stem.a" || exit $?
+			printf "dlname=''\nlibrary_names=''\nold_library='%s.a'\ndependency_libs='%s'\nlibdir=''\n" "$stem" "$la_deps $dlibs" > "$out"
+			exit 0
+		fi
+		rm -f "$dir/.libs/$stem.a"
+		run ar cr "$dir/.libs/$stem.a" $objs && run ranlib "$dir/.libs/$stem.a" || exit $?
+		old=$stem.a
+		rel=
+		[ -n "$release" ] && rel=-$release
+		case $vinfo in
+		"") cur=; ver=;;
+		*) IFS=: read -r cur rev age <<VI
+$vinfo
+VI
+		   : "${rev:=0}" "${age:=0}"
+		   major=$((cur - age)); ver=$major.$age.$rev;;
+		esac
+		if [ $static = yes ]; then
+			names=; dl=
+		elif [ $avoid = yes ] || [ -z "$vinfo" ]; then
+			real=$stem$rel.so; names=$real; dl=$real
+			run $cc_cmd -shared -o "$dir/.libs/$real" $pic $libs $la_deps $flags -Wl,-soname,"$real" || exit $?
+		else
+			real=$stem$rel.so.$ver; so=$stem$rel.so.$major
+			names="$real $so $stem$rel.so"; dl=$so
+			run $cc_cmd -shared -o "$dir/.libs/$real" $pic $libs $la_deps $flags -Wl,-soname,"$so" || exit $?
+			(cd "$dir/.libs" && ln -sf "$real" "$so" && ln -sf "$real" "$stem$rel.so")
+		fi
+		printf "dlname='%s'\nlibrary_names='%s'\nold_library='%s'\ndependency_libs='%s'\nlibdir='%s'\n" "$dl" "$names" "$old" "$la_deps $dlibs" "$rpath" > "$out"
+		;;
+	*)
+		run $cc_cmd -o "$out" $objs $libs $la_deps $flags || exit $?
+		;;
+	esac
+}
+
+install_la() {
+	cmd=$1 src=$2 dest=$3
+	d=${src%/*}; [ "$d" = "$src" ] && d=.
+	names=$(la_get "$src" library_names); old=$(la_get "$src" old_library)
+	libdir=$(la_get "$src" libdir); deps=$(la_get "$src" dependency_libs)
+	dd=$dest; [ -d "$dd" ] || dd=${dest%/*}
+	first=${names%% *}
+	set -f
+	if [ -n "$first" ]; then
+		# shellcheck disable=SC2086
+		run $cmd "$d/.libs/$first" "$dd/$first" || exit $?
+		for n in $names; do [ "$n" = "$first" ] || ln -sf "$first" "$dd/$n"; done
+	fi
+	[ -n "$old" ] && [ -e "$d/.libs/$old" ] && { run $cmd "$d/.libs/$old" "$dd/$old" || exit $?; }
+	b=${src##*/}
+	printf "dlname='%s'\nlibrary_names='%s'\nold_library='%s'\ndependency_libs='%s'\nlibdir='%s'\ninstalled=yes\n" "$(la_get "$src" dlname)" "$names" "$old" "$deps" "$libdir" > "$dd/$b"
+}
+
+install_cmd() {
+	cmd=
+	while [ $# -gt 0 ]; do
+		case $1 in
+		-o|-g|-m) cmd="$cmd $1 $2"; shift;;
+		-*|install|cp|ginstall|"") cmd="$cmd $1";;
+		*) break;;
+		esac
+		shift
+	done
+	[ -n "${cmd# }" ] || cmd=install
+	[ $# -ge 2 ] || { echo "libtool: install: need a source and a destination" >&2; exit 1; }
+	eval last=\${$#}
+	for a in "$@"; do
+		[ "$a" = "$last" ] && continue
+		case $a in
+		*.la) install_la "$cmd" "$a" "$last";;
+		*) set -f; run $cmd "$a" "$last" || exit $?;;
+		esac
+	done
+}
+
+case $mode in
+compile) cc_cmd=
+	# the compiler is everything before the first option
+	while [ $# -gt 0 ]; do
+		case $1 in -*|*.c|*.cc|*.cpp|*.S|*.s) break;; esac
+		cc_cmd="$cc_cmd $1"; shift
+	done
+	compile "$@";;
+link) cc_cmd=
+	while [ $# -gt 0 ]; do
+		case $1 in -*|*.o|*.lo|*.la|*.a) break;; esac
+		cc_cmd="$cc_cmd $1"; shift
+	done
+	link "$@";;
+install) install_cmd "$@";;
+finish) ;;
+execute) exec "$@";;
+clean|uninstall) rm_files=; for a in "$@"; do case $a in rm|-f|-rf|-r) ;; *) rm_files="$rm_files $a";; esac; done
+	for f in $rm_files; do
+		rm -f "$f"
+		case $f in
+		*.lo) b=${f%.lo}; d=${b%/*}; [ "$d" = "$b" ] && d=.; rm -f "$b.o" "$d/.libs/${b##*/}.o";;
+		*.la) b=${f%.la}; d=${b%/*}; [ "$d" = "$b" ] && d=.; rm -f "$d/.libs/${b##*/}".a "$d/.libs/${b##*/}".so*;;
+		esac
+	done;;
+*) echo "libtool: unknown mode $mode" >&2; exit 1;;
+esac

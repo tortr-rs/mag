@@ -779,9 +779,9 @@ static struct recipe *parse_pkgsrc(const char *id, const char *dir, const char *
             { "LOCALBASE", "$PREFIX" }, { "PKGMANDIR", "man" }, { "SETENV", "env" }, { "TOOLS_SHELL", "/bin/sh" }, { "SH", "/bin/sh" },
             { "CP", "cp" }, { "MV", "mv" }, { "RM", "rm" }, { "LN", "ln" }, { "MKDIR", "mkdir -p" }, { "ECHO", "echo" }, { "SED", "sed" },
             { "CHMOD", "chmod" }, { "TRUE", "true" }, { "CAT", "cat" }, { "TEST", "test" }, { "TOUCH", "touch" }, { "MAKE", "make" },
-            { "INSTALL_PROGRAM", "install -m 755" }, { "INSTALL_SCRIPT", "install -m 755" }, { "INSTALL_DATA", "install -m 644" },
+            { "INSTALL_PROGRAM", "install -m 755" }, { "INSTALL_LIB", "install -m 755" }, { "INSTALL_LIB_DIR", "install -d -m 755" }, { "INSTALL_GAME", "install -m 755" }, { "INSTALL_GAME_DATA", "install -m 644" }, { "INSTALL_SCRIPT", "install -m 755" }, { "INSTALL_DATA", "install -m 644" },
             { "INSTALL_MAN", "install -m 644" }, { "INSTALL_PROGRAM_DIR", "install -d -m 755" }, { "INSTALL_DATA_DIR", "install -d -m 755" },
-            { "INSTALL_SCRIPT_DIR", "install -d -m 755" }, { "INSTALL_MAN_DIR", "install -d -m 755" }, { "CC", "cc" }, { "LIBTOOL", "$SRC/.mag-libtool" }, { "PKG_SYSCONFDIR", "/etc" }, { "VARBASE", "/var" }, { "MACHINE_GNU_ARCH", "x86_64" }, { "MACHINE_GNU_PLATFORM", "x86_64-pc-linux-gnu" }, { "PKG_SHELL", "" }, { "REAL_ROOT_USER", "root" }, { "REAL_ROOT_GROUP", "root" }, { "RUN", "" }, { "RCD_SCRIPTS_DIR", "/etc/rc.d" }, { NULL, NULL }
+            { "INSTALL_SCRIPT_DIR", "install -d -m 755" }, { "INSTALL_MAN_DIR", "install -d -m 755" }, { "CC", "cc" }, { "LIBTOOL", "libtool" }, { "PKG_SYSCONFDIR", "/etc" }, { "VARBASE", "/var" }, { "MACHINE_GNU_ARCH", "x86_64" }, { "MACHINE_GNU_PLATFORM", "x86_64-pc-linux-gnu" }, { "PKG_SHELL", "" }, { "REAL_ROOT_USER", "root" }, { "REAL_ROOT_GROUP", "root" }, { "RUN", "" }, { "RCD_SCRIPTS_DIR", "/etc/rc.d" }, { NULL, NULL }
         };
         int k;
         for (k = 0; sh[k][0]; k++) var_set(&vs, sh[k][0], sh[k][1]);
@@ -897,7 +897,7 @@ static struct recipe *parse_pkgsrc(const char *id, const char *dir, const char *
     {
         const char *prefix_args = "";
         char *cfg = var_get(&vs, "CONFIGURE_ARGS") ? expand(&vs, var_get(&vs, "CONFIGURE_ARGS"), 0) : xstrdup("");
-        char *mflags = fmt("%s%s %s", var_get(&vs, "USE_LIBTOOL") ? "LIBTOOL=$SRC/.mag-libtool " : "", var_get(&vs, "MAKE_FLAGS") ? expand(&vs, var_get(&vs, "MAKE_FLAGS"), 0) : "", var_get(&vs, "BUILD_MAKE_FLAGS") ? expand(&vs, var_get(&vs, "BUILD_MAKE_FLAGS"), 0) : "");
+        char *mflags = fmt("%s%s %s", var_get(&vs, "USE_LIBTOOL") ? "LIBTOOL=libtool " : "", var_get(&vs, "MAKE_FLAGS") ? expand(&vs, var_get(&vs, "MAKE_FLAGS"), 0) : "", var_get(&vs, "BUILD_MAKE_FLAGS") ? expand(&vs, var_get(&vs, "BUILD_MAKE_FLAGS"), 0) : "");
         char *menv = var_get(&vs, "MAKE_ENV") ? expand(&vs, var_get(&vs, "MAKE_ENV"), 0) : xstrdup("");
         char *cenv = var_get(&vs, "CONFIGURE_ENV") ? expand(&vs, var_get(&vs, "CONFIGURE_ENV"), 0) : xstrdup("");
         char *btarget = var_get(&vs, "BUILD_TARGET") ? expand(&vs, var_get(&vs, "BUILD_TARGET"), 0) : xstrdup("");
@@ -911,12 +911,12 @@ static struct recipe *parse_pkgsrc(const char *id, const char *dir, const char *
         if ((g = var_get(&vs, "USE_TOOLS")) && strstr(g, "gmake")) make = "gmake";
         else if (!var_get(&vs, "TARGET.do-build") && !var_get(&vs, "NO_BUILD") && strcmp(id, "devel/bmake")) dep_add(r, "devel/bmake");
         var_set(&vs, "MAKE", make);
+        if (var_get(&vs, "USE_LIBTOOL")) dep_add(r, "dev-build/libtool");
         { int ti; for (ti = 0; ti < vs.n; ti++) if (!strncmp(vs.k[ti], "TARGET.", 7)) cap += strlen(vs.v[ti]) * 4; }
         steps = xmalloc(cap + strlen(cfg) + strlen(mflags) + strlen(menv) + strlen(cenv) + 1024);
         steps[0] = 0;
         cmd = steps;
         if (!var_get(&vs, "TARGET.do-extract")) cmd += sprintf(cmd, "ln -sfn src \"$SRC/../%s\"\n", distname);
-        cmd += sprintf(cmd, "printf '#!/bin/sh\\nwhile case $1 in --*) :;; *) false;; esac; do shift; done\\nexec \"$@\"\\n' > \"$SRC/.mag-libtool\"\nchmod +x \"$SRC/.mag-libtool\"\n");
         if (wrksrc && strstr(wrksrc, "/") ) {
             char *rel = strstr(wrksrc, distname);
             if (rel && rel[strlen(distname)] == '/') cmd += sprintf(cmd, "cd %s\n", rel + strlen(distname) + 1);
