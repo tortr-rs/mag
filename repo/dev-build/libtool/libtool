@@ -114,7 +114,7 @@ link() {
 			if [ -n "$first" ] && [ -e "$d/.libs/$first" ]; then
 				libs="$libs $d/.libs/$first"
 				[ -n "$ldir" ] && flags="$flags -Wl,-rpath,$ldir"
-			elif [ -n "$old" ]; then libs="$libs $d/.libs/$old"
+			elif [ -n "$old" ]; then libs="$libs -Wl,--whole-archive $d/.libs/$old -Wl,--no-whole-archive"
 			fi
 			la_deps="$la_deps $deps"
 			;;
@@ -135,7 +135,13 @@ link() {
 		stem=${name%.la}
 		if [ -z "$rpath" ]; then
 			rm -f "$dir/.libs/$stem.a"
-			run ar cr "$dir/.libs/$stem.a" $pic && run ranlib "$dir/.libs/$stem.a" || exit $?
+			run ar cr "$dir/.libs/$stem.a" $pic || exit $?
+			for a in $libs; do
+				case $a in *.a)
+					t=$(mktemp -d) && abs=$(cd "${a%/*}" && pwd)/${a##*/} && (cd "$t" && ar x "$abs") && { set +f; run ar cr "$dir/.libs/$stem.a" "$t"/*; set -f; } ; rm -rf "$t";;
+				esac
+			done
+			run ranlib "$dir/.libs/$stem.a" || exit $?
 			write_la "$out" "" "" "$stem.a" "$la_deps $dlibs" "" no
 			exit 0
 		fi
