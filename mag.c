@@ -1247,7 +1247,7 @@ static int fetch(const struct recipe *r)
             const char *url = i < 0 ? r->url : r->alts.v[i];
             char *av[7];
             printf("==> fetching %s\n", url);
-            av[0] = "/bin/sh"; av[1] = "-c"; av[2] = "set -f; $0 \"$1\" \"$2\""; av[3] = (char *)(cmd ? cmd : "curl -fsSL -o");
+            av[0] = "/bin/sh"; av[1] = "-c"; av[2] = "set -f; $0 \"$1\" \"$2\""; av[3] = (char *)(cmd ? cmd : "ftp -o");
             av[4] = tmp; av[5] = (char *)url; av[6] = NULL;
             if (run(av, NULL)) { unlink(tmp); continue; }
             sum = dist_sum(r, tmp);
@@ -1772,7 +1772,7 @@ static int cmd_sync(void)
 {
     const char *url = getenv("MAG_SYNC_URL"), *cmd = getenv("MAG_FETCH");
     char *file = fmt("%s/var/cache/mag/pkgsrc.tar.xz", root), *part = fmt("%s.part", file), *tmp = fmt("%s/usr/pkgsrc.sync", root), *tree = fmt("%s/usr/pkgsrc", root), *from = fmt("%s/pkgsrc", tmp);
-    char *dl[] = { "/bin/sh", "-c", "set -f; $0 \"$1\" \"$2\"", (char *)(cmd ? cmd : "curl -fsSL -o"), part, (char *)(url ? url : "https://cdn.netbsd.org/pub/pkgsrc/current/pkgsrc.tar.xz"), NULL };
+    char *dl[] = { "/bin/sh", "-c", "set -f; $0 \"$1\" \"$2\"", (char *)(cmd ? cmd : "ftp -o"), part, (char *)(url ? url : "https://cdn.netbsd.org/pub/pkgsrc/current/pkgsrc.tar.xz"), NULL };
     char *un[] = { "tar", "-xf", file, "-C", tmp, NULL };
     char *rm[] = { "rm", "-rf", tree, NULL };
     char *dir = xstrdup(file);
@@ -1899,7 +1899,7 @@ static void usage(void)
          "\n"
          "MAG_ROOT installs somewhere else than /, MAG_REPO is a list of repos split by colons (default\n"
          "/usr/share/mag/repo:/usr/pkgsrc), MAG_SYNC_URL is where sync gets the tree,\n"
-         "MAG_FETCH is the download command, which gets a file and an url (default curl -fsSL -o), MAG_PREFIX is $PREFIX for the steps, /usr, and MAG_JOBS is $JOBS, 4");
+         "MAG_FETCH is the download command, which gets a file and an url (default ftp -o), MAG_PREFIX is $PREFIX for the steps, /usr, and MAG_JOBS is $JOBS, 4");
 }
 
 int main(int argc, char **argv)
