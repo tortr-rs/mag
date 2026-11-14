@@ -64,6 +64,18 @@ static int has(const struct list *l, const char *s)
     for (i = 0; i < l->n; i++) if (!strcmp(l->v[i], s)) return 1;
     return 0;
 }
+static char *strtok_r(char *s, const char *delim, char **save)
+{
+    char *e;
+    if (!s) s = *save;
+    if (!s) return NULL;
+    s += strspn(s, delim);
+    if (!*s) { *save = NULL; return NULL; }
+    e = s + strcspn(s, delim);
+    if (*e) *e++ = 0; else e = NULL;
+    *save = e;
+    return s;
+}
 static int cmp_str(const void *a, const void *b) { return strcmp(*(char *const *)a, *(char *const *)b); }
 
 static char *slurp(const char *path, size_t *len)
@@ -173,11 +185,77 @@ static char *sha256_file(const char *path)
     return hex;
 }
 
+
+/* ---- sha512, for pkgsrc's distinfo ---- */
+
+static const unsigned long long k512[80] = {
+    0x428a2f98d728ae22ULL, 0x7137449123ef65cdULL, 0xb5c0fbcfec4d3b2fULL, 0xe9b5dba58189dbbcULL, 0x3956c25bf348b538ULL, 0x59f111f1b605d019ULL,
+    0x923f82a4af194f9bULL, 0xab1c5ed5da6d8118ULL, 0xd807aa98a3030242ULL, 0x12835b0145706fbeULL, 0x243185be4ee4b28cULL, 0x550c7dc3d5ffb4e2ULL,
+    0x72be5d74f27b896fULL, 0x80deb1fe3b1696b1ULL, 0x9bdc06a725c71235ULL, 0xc19bf174cf692694ULL, 0xe49b69c19ef14ad2ULL, 0xefbe4786384f25e3ULL,
+    0x0fc19dc68b8cd5b5ULL, 0x240ca1cc77ac9c65ULL, 0x2de92c6f592b0275ULL, 0x4a7484aa6ea6e483ULL, 0x5cb0a9dcbd41fbd4ULL, 0x76f988da831153b5ULL,
+    0x983e5152ee66dfabULL, 0xa831c66d2db43210ULL, 0xb00327c898fb213fULL, 0xbf597fc7beef0ee4ULL, 0xc6e00bf33da88fc2ULL, 0xd5a79147930aa725ULL,
+    0x06ca6351e003826fULL, 0x142929670a0e6e70ULL, 0x27b70a8546d22ffcULL, 0x2e1b21385c26c926ULL, 0x4d2c6dfc5ac42aedULL, 0x53380d139d95b3dfULL,
+    0x650a73548baf63deULL, 0x766a0abb3c77b2a8ULL, 0x81c2c92e47edaee6ULL, 0x92722c851482353bULL, 0xa2bfe8a14cf10364ULL, 0xa81a664bbc423001ULL,
+    0xc24b8b70d0f89791ULL, 0xc76c51a30654be30ULL, 0xd192e819d6ef5218ULL, 0xd69906245565a910ULL, 0xf40e35855771202aULL, 0x106aa07032bbd1b8ULL,
+    0x19a4c116b8d2d0c8ULL, 0x1e376c085141ab53ULL, 0x2748774cdf8eeb99ULL, 0x34b0bcb5e19b48a8ULL, 0x391c0cb3c5c95a63ULL, 0x4ed8aa4ae3418acbULL,
+    0x5b9cca4f7763e373ULL, 0x682e6ff3d6b2b8a3ULL, 0x748f82ee5defb2fcULL, 0x78a5636f43172f60ULL, 0x84c87814a1f0ab72ULL, 0x8cc702081a6439ecULL,
+    0x90befffa23631e28ULL, 0xa4506cebde82bde9ULL, 0xbef9a3f7b2c67915ULL, 0xc67178f2e372532bULL, 0xca273eceea26619cULL, 0xd186b8c721c0c207ULL,
+    0xeada7dd6cde0eb1eULL, 0xf57d4f7fee6ed178ULL, 0x06f067aa72176fbaULL, 0x0a637dc5a2c898a6ULL, 0x113f9804bef90daeULL, 0x1b710b35131c471bULL,
+    0x28db77f523047d84ULL, 0x32caab7b40c72493ULL, 0x3c9ebe0a15c9bebcULL, 0x431d67c49c100d4cULL, 0x4cc5d4becb3e42b6ULL, 0x597f299cfc657e2aULL,
+    0x5fcb6fab3ad6faecULL, 0x6c44198c4a475817ULL };
+
+#define ROR64(x, n) (((x) >> (n)) | ((x) << (64 - (n))))
+
+static void sha512_block(unsigned long long *h, const unsigned char *p)
+{
+    unsigned long long w[80], v[8];
+    int i, j;
+    for (i = 0; i < 16; i++) { w[i] = 0; for (j = 0; j < 8; j++) w[i] = w[i] << 8 | p[i * 8 + j]; }
+    for (i = 16; i < 80; i++) {
+        unsigned long long s0 = ROR64(w[i - 15], 1) ^ ROR64(w[i - 15], 8) ^ (w[i - 15] >> 7), s1 = ROR64(w[i - 2], 19) ^ ROR64(w[i - 2], 61) ^ (w[i - 2] >> 6);
+        w[i] = w[i - 16] + s0 + w[i - 7] + s1;
+    }
+    memcpy(v, h, sizeof v);
+    for (i = 0; i < 80; i++) {
+        unsigned long long t1 = v[7] + (ROR64(v[4], 14) ^ ROR64(v[4], 18) ^ ROR64(v[4], 41)) + ((v[4] & v[5]) ^ (~v[4] & v[6])) + k512[i] + w[i];
+        unsigned long long t2 = (ROR64(v[0], 28) ^ ROR64(v[0], 34) ^ ROR64(v[0], 39)) + ((v[0] & v[1]) ^ (v[0] & v[2]) ^ (v[1] & v[2]));
+        v[7] = v[6]; v[6] = v[5]; v[5] = v[4]; v[4] = v[3] + t1; v[3] = v[2]; v[2] = v[1]; v[1] = v[0]; v[0] = t1 + t2;
+    }
+    for (i = 0; i < 8; i++) h[i] += v[i];
+}
+
+static char *sha512_file(const char *path)
+{
+    unsigned long long h[8] = { 0x6a09e667f3bcc908ULL, 0xbb67ae8584caa73bULL, 0x3c6ef372fe94f82bULL, 0xa54ff53a5f1d36f1ULL,
+        0x510e527fade682d1ULL, 0x9b05688c2b3e6c1fULL, 0x1f83d9abfb41bd6bULL, 0x5be0cd19137e2179ULL };
+    unsigned char buf[128], tail[256];
+    unsigned long long total = 0;
+    size_t have = 0, i;
+    int fd = open(path, O_RDONLY);
+    char *hex = xmalloc(129);
+    ssize_t r;
+    if (fd < 0) { free(hex); return NULL; }
+    while ((r = read(fd, buf + have, 128 - have)) > 0) {
+        have += r; total += r;
+        if (have == 128) { sha512_block(h, buf); have = 0; }
+    }
+    close(fd);
+    if (r < 0) { free(hex); return NULL; }
+    memcpy(tail, buf, have);
+    tail[have++] = 0x80;
+    while (have % 128 != 112) tail[have++] = 0;
+    for (i = 0; i < 8; i++) tail[have++] = 0;
+    for (i = 0; i < 8; i++) tail[have++] = (total * 8) >> (56 - 8 * i);
+    for (i = 0; i < have; i += 128) sha512_block(h, tail + i);
+    for (i = 0; i < 8; i++) sprintf(hex + i * 16, "%016llx", h[i]);
+    return hex;
+}
+
 /* ---- recipes ---- */
 
 struct recipe {
-    char *id, *file, *dir, *desc, *version, *url, *sha, *steps;
-    struct list deps;
+    char *id, *file, *dir, *desc, *version, *url, *sha, *sha512, *steps;
+    struct list deps, alts;
 };
 
 static char *trim(char *s)
@@ -259,14 +337,423 @@ static struct recipe *parse_recipe(const char *id, const char *file, const char 
     return r;
 }
 
-/* cat/name inside one repo, as a file or as a directory with a file called recipe in it */
+/* ---- pkgsrc packages: a directory with a Makefile and a distinfo, read as they are ----
+ * the Makefile is parsed here, not run: assignments, ${VAR} with a few modifiers, .if with the usual tests, .include of
+ * Makefile.common and of buildlink3.mk files (those are the dependencies). what is not understood is skipped,
+ * and a package that needs the mk/ framework for more than that says so when it fails to build */
+
+struct vars { char **k, **v; int n, cap; };
+
+static const char *var_get(const struct vars *vs, const char *k)
+{
+    int i;
+    for (i = vs->n - 1; i >= 0; i--) if (!strcmp(vs->k[i], k)) return vs->v[i];
+    return NULL;
+}
+static void var_set(struct vars *vs, const char *k, const char *v)
+{
+    int i;
+    for (i = 0; i < vs->n; i++) if (!strcmp(vs->k[i], k)) { free(vs->v[i]); vs->v[i] = xstrdup(v); return; }
+    if (vs->n == vs->cap) { vs->cap = vs->cap ? vs->cap * 2 : 64; vs->k = xrealloc(vs->k, vs->cap * sizeof *vs->k); vs->v = xrealloc(vs->v, vs->cap * sizeof *vs->v); }
+    vs->k[vs->n] = xstrdup(k); vs->v[vs->n++] = xstrdup(v);
+}
+
+static int glob_match(const char *p, const char *s)
+{
+    for (; *p; p++, s++) {
+        if (*p == '*') { while (p[1] == '*') p++; for (;; s++) { if (glob_match(p + 1, s)) return 1; if (!*s) return 0; } }
+        if (!*s) return 0;
+        if (*p == '?') continue;
+        if (*p != *s) return 0;
+    }
+    return !*s;
+}
+
+static char *expand(const struct vars *vs, const char *s, int depth);
+
+/* one modifier on a value, words separated by spaces */
+static char *apply_mod(const struct vars *vs, char *val, const char *mod, size_t len, int depth)
+{
+    char *m = strndup(mod, len), *out = xmalloc(strlen(val) * 2 + 1024), *o = out, *w, *save, *copy = xstrdup(val);
+    *out = 0;
+    if (m[0] == '=' ) {
+        char *sub = expand(vs, m + 1, depth + 1);
+        for (w = strtok_r(copy, " \t", &save); w; w = strtok_r(NULL, " \t", &save)) o += sprintf(o, "%s%s%s", o == out ? "" : " ", w, sub);
+        free(sub);
+    } else if (m[0] == 'M' || m[0] == 'N') {
+        int want = m[0] == 'M';
+        char *pat = expand(vs, m + 1, depth + 1);
+        for (w = strtok_r(copy, " \t", &save); w; w = strtok_r(NULL, " \t", &save)) if (glob_match(pat, w) == want) o += sprintf(o, "%s%s", o == out ? "" : " ", w);
+        free(pat);
+    } else if ((m[0] == 'S' || m[0] == 'C') && m[1]) {
+        char d = m[1], *a = m + 2, *b = strchr(a, d), *c, *flags;
+        if (b) { *b++ = 0; c = strchr(b, d); if (c) { *c++ = 0; flags = c; } else flags = ""; } else { b = ""; flags = ""; }
+        {
+            int g = strchr(flags, 'g') != NULL, al = strlen(a);
+            char *p = copy;
+            if (a[0] == '^') { a++; al--; o += sprintf(o, "%s", b); if (!strncmp(p, a, al)) p += al; sprintf(o, "%s", p); }
+            else {
+                int done = 0;
+                while (*p) {
+                    if ((!done || g) && al && !strncmp(p, a, al)) { o += sprintf(o, "%s", b); p += al; done = 1; }
+                    else *o++ = *p++;
+                }
+                *o = 0;
+            }
+        }
+    } else if (!strcmp(m, "tl") || !strcmp(m, "tu")) {
+        int up = m[1] == 'u';
+        char *p;
+        for (p = copy; *p; p++) *p = up ? toupper((unsigned char)*p) : tolower((unsigned char)*p);
+        strcpy(out, copy);
+    } else if (m[0] == 'u' && !m[1]) strcpy(out, copy);
+    else strcpy(out, copy);
+    free(m); free(copy);
+    return out;
+}
+
+static char *expand(const struct vars *vs, const char *s, int depth)
+{
+    size_t cap = strlen(s) * 2 + 256, n = 0;
+    char *out = xmalloc(cap);
+    if (depth > 20) { out[0] = 0; return out; }
+    while (*s) {
+        if (s[0] == '$' && s[1] == '$') { out[n++] = '$'; s += 2; }
+        else if (s[0] == '$' && (s[1] == '{' || s[1] == '(')) {
+            char open = s[1], close = open == '{' ? '}' : ')';
+            const char *p = s + 2, *name_end;
+            int d = 1;
+            char *name, *val, *tmp;
+            const char *got;
+            while (*p && d) { if (*p == open) d++; else if (*p == close) d--; p++; }
+            name_end = s + 2;
+            while (name_end < p - 1 && *name_end != ':') name_end++;
+            name = strndup(s + 2, name_end - (s + 2));
+            got = var_get(vs, name);
+            val = got ? expand(vs, got, depth + 1) : xstrdup("");
+            while (name_end < p - 1) {
+                const char *me = name_end + 1;
+                int dd = 0;
+                while (me < p - 1 && (*me != ':' || dd)) { if (*me == '{') dd++; else if (*me == '}') dd--; me++; }
+                tmp = apply_mod(vs, val, name_end + 1, me - (name_end + 1), depth);
+                free(val); val = tmp;
+                name_end = me;
+            }
+            if (n + strlen(val) + 2 > cap) { cap = (n + strlen(val)) * 2 + 2; out = xrealloc(out, cap); }
+            memcpy(out + n, val, strlen(val)); n += strlen(val);
+            free(name); free(val);
+            s = p;
+        } else {
+            if (n + 2 > cap) { cap *= 2; out = xrealloc(out, cap); }
+            out[n++] = *s++;
+        }
+    }
+    out[n] = 0;
+    return out;
+}
+
+/* a condition from .if / .elif */
+static int cond_term(const struct vars *vs, char *t)
+{
+    int neg = 0;
+    char *e;
+    int r;
+    t = trim(t);
+    while (*t == '!') { neg = !neg; t = trim(t + 1); }
+    if (*t == '(' && t[strlen(t) - 1] == ')') { t[strlen(t) - 1] = 0; return neg ^ cond_term(vs, t + 1); }
+    if (!strncmp(t, "defined(", 8)) { t[strlen(t) - 1] = 0; r = var_get(vs, trim(t + 8)) != NULL; }
+    else if (!strncmp(t, "empty(", 6)) {
+        char *a = xstrdup(t + 6), *tmp;
+        a[strlen(a) - 1] = 0;
+        tmp = fmt("${%s}", a);
+        e = expand(vs, tmp, 0);
+        r = !*trim(e);
+        free(e); free(tmp); free(a);
+    } else if (!strncmp(t, "exists(", 7) || !strncmp(t, "make(", 5) || !strncmp(t, "target(", 7)) r = 0;
+    else {
+        char *eq = strstr(t, "=="), *ne = strstr(t, "!="), *op = eq && (!ne || eq < ne) ? eq : ne;
+        if (op) {
+            char *a, *b, *ea, *eb;
+            int same;
+            a = strndup(t, op - t); b = xstrdup(op + 2);
+            ea = expand(vs, trim(a), 0); eb = expand(vs, trim(b), 0);
+            { char *x = trim(ea), *y = trim(eb); size_t l;
+              if (*x == '"') { x++; l = strlen(x); if (l && x[l - 1] == '"') x[l - 1] = 0; }
+              if (*y == '"') { y++; l = strlen(y); if (l && y[l - 1] == '"') y[l - 1] = 0; }
+              same = !strcmp(x, y); }
+            r = op == eq ? same : !same;
+            free(a); free(b); free(ea); free(eb);
+        } else {
+            e = expand(vs, t, 0);
+            r = *trim(e) && strcmp(trim(e), "0");
+            free(e);
+        }
+    }
+    return neg ? !r : r;
+}
+static int cond_eval(const struct vars *vs, const char *c)
+{
+    char *s = xstrdup(c), *p, *or_;
+    int r = 0, depth = 0;
+    /* split on || at depth 0, then && */
+    for (p = s, or_ = NULL; *p; p++) {
+        if (*p == '(') depth++; else if (*p == ')') depth--;
+        else if (!depth && p[0] == '|' && p[1] == '|') { *p = 0; r = r || cond_eval(vs, s); s = p + 2; p++; or_ = p; }
+    }
+    if (or_) { r = r || cond_eval(vs, s); return r; }
+    {
+        char *t = s, *q;
+        int res = 1;
+        depth = 0;
+        for (q = s; ; q++) {
+            if (*q == '(') depth++; else if (*q == ')') depth--;
+            if (!*q || (!depth && q[0] == '&' && q[1] == '&')) {
+                int end = !*q;
+                *q = 0;
+                res = res && cond_term(vs, t);
+                if (end) break;
+                t = q + 2; q++;
+            }
+        }
+        return res;
+    }
+}
+
+static void read_makefile(struct vars *vs, const char *file, const char *pkgdir, const char *repo, struct list *bl, int depth)
+{
+    char *text = slurp(file, NULL), *line, *next;
+    int skip[32], taken[32], sp = 0;
+    int i;
+    if (!text || depth > 6) { free(text); return; }
+    memset(skip, 0, sizeof skip); memset(taken, 0, sizeof taken);
+    for (line = text; line; line = next) {
+        char *l, *op, *k, *v;
+        size_t len;
+        next = strchr(line, '\n');
+        if (next) *next++ = 0;
+        /* continuation lines */
+        while ((len = strlen(line)) && line[len - 1] == '\\' && next) {
+            char *n2 = strchr(next, '\n');
+            line[len - 1] = ' ';
+            if (n2) *n2 = 0;
+            memmove(line + len, next, strlen(next) + 1);
+            next = n2 ? n2 + 1 : NULL;
+            if (!n2) break;
+        }
+        l = trim(line);
+        if (*l == '#' || !*l) continue;
+        if (*l == '.') {
+            char *dir = trim(l + 1);
+            int skipping = 0;
+            for (i = 0; i < sp; i++) if (skip[i]) skipping = 1;
+            if (!strncmp(dir, "if", 2) && dir[2] != 'n' ? 1 : (!strncmp(dir, "ifdef", 5) || !strncmp(dir, "ifndef", 6) || !strncmp(dir, "if ", 3) || !strncmp(dir, "if(", 3) || !strncmp(dir, "if!", 3))) {
+                char *c;
+                int r = 0;
+                if (!strncmp(dir, "ifdef", 5)) { c = trim(dir + 5); r = var_get(vs, c) != NULL; }
+                else if (!strncmp(dir, "ifndef", 6)) { c = trim(dir + 6); r = var_get(vs, c) == NULL; }
+                else r = skipping ? 0 : cond_eval(vs, dir + 2);
+                if (sp < 31) { skip[sp] = !r; taken[sp] = r; sp++; }
+            } else if (!strncmp(dir, "elif", 4)) {
+                if (sp) { int r = !taken[sp - 1] && cond_eval(vs, dir + 4); skip[sp - 1] = !r; if (r) taken[sp - 1] = 1; }
+            } else if (!strncmp(dir, "else", 4)) { if (sp) { skip[sp - 1] = taken[sp - 1]; taken[sp - 1] = 1; } }
+            else if (!strncmp(dir, "endif", 5)) { if (sp) sp--; }
+            else if (!skipping && !strncmp(dir, "include", 7)) {
+                char *q = strchr(dir, '"'), *e2;
+                char *inc;
+                if (!q) continue;
+                inc = xstrdup(q + 1);
+                e2 = strchr(inc, '"');
+                if (e2) *e2 = 0;
+                {
+                    char *x = expand(vs, inc, 0);
+                    free(inc); inc = x;
+                }
+                if (strstr(inc, "/buildlink3.mk") && !strncmp(inc, "../../", 6)) {
+                    char *d = xstrdup(inc + 6);
+                    char *sl = strstr(d, "/buildlink3.mk");
+                    *sl = 0;
+                    if (!has(bl, d)) push(bl, d); else free(d);
+                } else if (!strncmp(inc, "../../mk/", 9) || !strncmp(inc, "../mk/", 6)) {
+                    /* the framework: not read */
+                } else if (!strncmp(inc, "../../", 6) && strstr(inc, ".mk")) {
+                    /* another package's .mk file: not read */
+                } else if (inc[0] != '/') {
+                    char *p = fmt("%s/%s", pkgdir, inc);
+                    read_makefile(vs, p, pkgdir, repo, bl, depth + 1);
+                    free(p);
+                }
+                free(inc);
+            }
+            continue;
+        }
+        for (i = 0; i < sp; i++) if (skip[i]) break;
+        if (i < sp) continue;
+        /* VAR op value */
+        {
+            char *p = l;
+            while (*p && *p != '=' && *p != ' ' && *p != '\t' && *p != '+' && *p != '?' && *p != ':' && *p != '!') p++;
+            k = strndup(l, p - l);
+            while (*p == ' ' || *p == '\t') p++;
+            if (!strncmp(p, "+=", 2)) { op = "+="; p += 2; }
+            else if (!strncmp(p, "?=", 2)) { op = "?="; p += 2; }
+            else if (!strncmp(p, ":=", 2)) { op = ":="; p += 2; }
+            else if (!strncmp(p, "!=", 2)) { op = "!="; p += 2; }
+            else if (*p == '=') { op = "="; p++; }
+            else { free(k); continue; }
+            v = trim(p);
+        }
+        if (!strcmp(op, "?=")) { if (!var_get(vs, k)) var_set(vs, k, v); }
+        else if (!strcmp(op, "+=")) {
+            const char *old = var_get(vs, k);
+            char *nv = old ? fmt("%s %s", old, v) : xstrdup(v);
+            var_set(vs, k, nv); free(nv);
+        } else if (!strcmp(op, ":=")) { char *e = expand(vs, v, 0); var_set(vs, k, e); free(e); }
+        else if (!strcmp(op, "!=")) { /* a shell command: not run */ var_set(vs, k, ""); }
+        else var_set(vs, k, v);
+        free(k);
+    }
+    free(text);
+}
+
+/* sites.mk: MASTER_SITE_GNU and the rest, read from the pkgsrc root if it is there */
+static void load_sites(struct vars *vs, const char *repo)
+{
+    char *f = fmt("%s/mk/fetch/sites.mk", repo);
+    struct list bl = { 0 };
+    if (exists(f)) read_makefile(vs, f, repo, repo, &bl, 0);
+    free(f);
+}
+
+static char *distinfo_hash(const char *text, const char *algo, const char *file)
+{
+    char *key = fmt("%s (%s) = ", algo, file), *p = text ? strstr(text, key) : NULL, *e, *out;
+    free(key);
+    if (!p) return NULL;
+    p = strchr(p, '=') + 2;
+    e = p + strcspn(p, " \n\r");
+    out = strndup(p, e - p);
+    return out;
+}
+
+static const char *const tool_pkgs[][2] = {
+    { "gmake", "devel/gmake" }, { "bison", "devel/bison" }, { "m4", "devel/m4" }, { "flex", "devel/flex" }, { "pkg-config", "devel/pkgconf" },
+    { "perl", "lang/perl5" }, { "autoconf", "devel/autoconf" }, { "automake", "devel/automake" }, { "libtool", "devel/libtool-base" },
+    { "gettext", "devel/gettext-tools" }, { "msgfmt", "devel/gettext-tools" }, { "patch", "devel/patch" }, { "yacc", "devel/byacc" },
+    { "cmake", "devel/cmake" }, { "ninja", "devel/samurai" }, { NULL, NULL } };
+
+static struct recipe *parse_pkgsrc(const char *id, const char *dir, const char *repo)
+{
+    struct vars vs = { 0 };
+    struct list bl = { 0 };
+    struct recipe *r;
+    char *mf = fmt("%s/Makefile", dir), *di = fmt("%s/distinfo", dir), *dtext, *distname, *pkgname, *sufx, *sites, *distfiles, *dfile, *tok, *save, *s, *w, *x, *steps, *cmd;
+    const char *g;
+    int i;
+    var_set(&vs, "OPSYS", "Linux"); var_set(&vs, "MACHINE_ARCH", "x86_64"); var_set(&vs, "LOWER_OPSYS", "linux");
+    var_set(&vs, "MACHINE_PLATFORM", "Linux-x86_64"); var_set(&vs, "PKGSRC_COMPILER", "clang"); var_set(&vs, "OPSYS_VERSION", "0");
+    load_sites(&vs, repo);
+    read_makefile(&vs, mf, dir, repo, &bl, 0);
+    free(mf);
+    if (!(g = var_get(&vs, "DISTNAME")) && !var_get(&vs, "PKGNAME")) { free(di); return NULL; }
+    r = xmalloc(sizeof *r);
+    memset(r, 0, sizeof *r);
+    r->id = xstrdup(id); r->file = fmt("%s/Makefile", dir); r->dir = xstrdup(dir);
+    distname = expand(&vs, var_get(&vs, "DISTNAME") ? var_get(&vs, "DISTNAME") : "${PKGNAME}", 0);
+    pkgname = expand(&vs, var_get(&vs, "PKGNAME") ? var_get(&vs, "PKGNAME") : "${DISTNAME}", 0);
+    { char *dash = strrchr(pkgname, '-'); r->version = xstrdup(dash ? dash + 1 : "0"); }
+    r->desc = var_get(&vs, "COMMENT") ? expand(&vs, var_get(&vs, "COMMENT"), 0) : xstrdup("");
+    sufx = expand(&vs, var_get(&vs, "EXTRACT_SUFX") ? var_get(&vs, "EXTRACT_SUFX") : ".tar.gz", 0);
+    distfiles = var_get(&vs, "DISTFILES") ? expand(&vs, var_get(&vs, "DISTFILES"), 0) : fmt("%s%s", distname, sufx);
+    sites = var_get(&vs, "MASTER_SITES") ? expand(&vs, var_get(&vs, "MASTER_SITES"), 0) : xstrdup("");
+    dfile = xstrdup(distfiles);
+    dfile[strcspn(dfile, " \t")] = 0;
+    { char *c = strchr(dfile, ':'); if (c) *c = 0; }
+    dtext = slurp(di, NULL);
+    free(di);
+    r->sha512 = distinfo_hash(dtext, "SHA512", dfile);
+    for (tok = strtok_r(sites, " \t", &save); tok; tok = strtok_r(NULL, " \t", &save)) {
+        char *u;
+        if (strncmp(tok, "http", 4) && strncmp(tok, "ftp", 3) && strncmp(tok, "file:", 5)) continue;
+        u = fmt("%s%s%s", tok, tok[strlen(tok) - 1] == '/' ? "" : "/", dfile);
+        /* a github release name that does not end in the file name keeps what the Makefile wrote */
+        if (!r->url) r->url = u; else push(&r->alts, u);
+    }
+    /* the dependencies: DEPENDS and BUILD_DEPENDS lines look like pkg>=1.0:../../category/pkg, and buildlink3 includes */
+    {
+        static const char *const names[] = { "DEPENDS", "BUILD_DEPENDS", "TOOL_DEPENDS", "BUILD_TOOL_DEPENDS", NULL };
+        for (i = 0; names[i]; i++) {
+            if (!(g = var_get(&vs, names[i]))) continue;
+            s = expand(&vs, g, 0);
+            for (w = strtok_r(s, " \t", &save); w; w = strtok_r(NULL, " \t", &save)) {
+                char *c = strstr(w, ":../../");
+                if (!c) continue;
+                x = xstrdup(c + 7);
+                if (has(&r->deps, x)) free(x); else push(&r->deps, x);
+            }
+            free(s);
+        }
+    }
+    for (i = 0; i < bl.n; i++) if (!has(&r->deps, bl.v[i])) push(&r->deps, bl.v[i]);
+    if ((g = var_get(&vs, "USE_TOOLS"))) {
+        int j;
+        s = expand(&vs, g, 0);
+        for (w = strtok_r(s, " \t", &save); w; w = strtok_r(NULL, " \t", &save)) {
+            char *c = strchr(w, ':');
+            if (c) *c = 0;
+            for (j = 0; tool_pkgs[j][0]; j++) if (!strcmp(w, tool_pkgs[j][0]) && !has(&r->deps, (char *)tool_pkgs[j][1])) push(&r->deps, xstrdup(tool_pkgs[j][1]));
+        }
+        free(s);
+    }
+    /* the steps: patches, configure, build, install, each from the variables pkgsrc has for it */
+    {
+        const char *prefix_args = "";
+        char *cfg = var_get(&vs, "CONFIGURE_ARGS") ? expand(&vs, var_get(&vs, "CONFIGURE_ARGS"), 0) : xstrdup("");
+        char *mflags = var_get(&vs, "MAKE_FLAGS") ? expand(&vs, var_get(&vs, "MAKE_FLAGS"), 0) : xstrdup("");
+        char *menv = var_get(&vs, "MAKE_ENV") ? expand(&vs, var_get(&vs, "MAKE_ENV"), 0) : xstrdup("");
+        char *cenv = var_get(&vs, "CONFIGURE_ENV") ? expand(&vs, var_get(&vs, "CONFIGURE_ENV"), 0) : xstrdup("");
+        char *btarget = var_get(&vs, "BUILD_TARGET") ? expand(&vs, var_get(&vs, "BUILD_TARGET"), 0) : xstrdup("");
+        char *itarget = var_get(&vs, "INSTALL_TARGET") ? expand(&vs, var_get(&vs, "INSTALL_TARGET"), 0) : xstrdup("install");
+        char *wrksrc = var_get(&vs, "WRKSRC") ? expand(&vs, var_get(&vs, "WRKSRC"), 0) : NULL;
+        int gnu = var_get(&vs, "GNU_CONFIGURE") != NULL, cmake = var_get(&vs, "USE_CMAKE") != NULL, hasconfig = gnu || var_get(&vs, "HAS_CONFIGURE") != NULL;
+        const char *make = "make";
+        size_t cap = 4096;
+        (void)prefix_args;
+        if ((g = var_get(&vs, "USE_TOOLS")) && strstr(g, "gmake")) make = "gmake";
+        steps = xmalloc(cap + strlen(cfg) + strlen(mflags) + strlen(menv) + strlen(cenv) + 1024);
+        steps[0] = 0;
+        cmd = steps;
+        if (wrksrc && strstr(wrksrc, "/") ) {
+            char *rel = strstr(wrksrc, distname);
+            if (rel && rel[strlen(distname)] == '/') cmd += sprintf(cmd, "cd %s\n", rel + strlen(distname) + 1);
+        }
+        cmd += sprintf(cmd, "for p in \"$RECIPE_DIR\"/patches/patch-*; do [ -f \"$p\" ] || continue; patch -p0 < \"$p\"; done\n");
+        if (cmake) cmd += sprintf(cmd, "mkdir -p mag-build && cd mag-build && %s cmake -G Ninja -DCMAKE_INSTALL_PREFIX=$PREFIX %s ..\nsamu\nDESTDIR=$DESTDIR samu install\n", cenv, cfg);
+        else {
+            if (hasconfig) cmd += sprintf(cmd, "%s ./configure --prefix=$PREFIX %s\n", cenv, cfg);
+            cmd += sprintf(cmd, "%s %s -j$JOBS %s %s\n", menv, make, mflags, btarget);
+            cmd += sprintf(cmd, "%s %s DESTDIR=$DESTDIR %s %s\n", menv, make, mflags, itarget);
+        }
+        r->steps = steps;
+        free(cfg); free(mflags); free(menv); free(cenv); free(btarget); free(itarget); free(wrksrc);
+    }
+    free(dtext); free(distname); free(pkgname); free(sufx); free(distfiles); free(dfile); free(sites);
+    (void)repo;
+    return r;
+}
+
+/* cat/name inside one repo: a file, a directory with a file called recipe in it, or a pkgsrc package */
 static struct recipe *try_repo(const char *repo, const char *id)
 {
     char *p = fmt("%s/%s", repo, id);
     struct recipe *r = NULL;
     struct stat st;
     if (stat(p, &st) == 0) {
-        if (S_ISDIR(st.st_mode)) { char *f = fmt("%s/recipe", p); r = parse_recipe(id, f, p); free(f); }
+        if (S_ISDIR(st.st_mode)) {
+            char *f = fmt("%s/recipe", p), *mk = fmt("%s/Makefile", p);
+            if (exists(f)) r = parse_recipe(id, f, p);
+            else if (exists(mk)) r = parse_pkgsrc(id, p, repo);
+            free(f); free(mk);
+        }
         else r = parse_recipe(id, p, repo);
     }
     free(p);
@@ -397,36 +884,43 @@ static char *distfile(const struct recipe *r)
     return fmt("%s/var/cache/mag/%s", root, b ? b + 1 : r->url);
 }
 
+static char *dist_sum(const struct recipe *r, const char *file) { return r->sha512 ? sha512_file(file) : sha256_file(file); }
+
 static int fetch(const struct recipe *r)
 {
     char *file, *sum, *tmp;
+    const char *want = r->sha512 ? r->sha512 : r->sha;
+    int i, got = 0;
     if (!r->url) return 0;
-    if (!r->sha) die("%s has no sha256", r->id);
+    if (!want) die("%s has no checksum", r->id);
     file = distfile(r);
-    sum = sha256_file(file);
-    if (sum && !strcmp(sum, r->sha)) { free(sum); free(file); return 0; }
+    sum = dist_sum(r, file);
+    if (sum && !strcmp(sum, want)) { free(sum); free(file); return 0; }
     if (sum) { say("%s: the cached file does not match, fetching again", r->id); unlink(file); }
     free(sum);
     {
         char *dir = xstrdup(file), *sl = strrchr(dir, '/');
         const char *cmd = getenv("MAG_FETCH");
-        char *av[7];
-        int rc;
         *sl = 0;
         mkpath(dir, 0755);
         free(dir);
         tmp = fmt("%s.part", file);
-        printf("==> fetching %s\n", r->url);
-        av[0] = "/bin/sh"; av[1] = "-c"; av[2] = "set -f; $0 \"$1\" \"$2\""; av[3] = (char *)(cmd ? cmd : "curl -fsSL -o");
-        av[4] = tmp; av[5] = r->url; av[6] = NULL;
-        rc = run(av, NULL);
-        if (rc) { unlink(tmp); die("could not fetch %s", r->url); }
-        rename(tmp, file);
+        for (i = -1; i < r->alts.n && !got; i++) {
+            const char *url = i < 0 ? r->url : r->alts.v[i];
+            char *av[7];
+            printf("==> fetching %s\n", url);
+            av[0] = "/bin/sh"; av[1] = "-c"; av[2] = "set -f; $0 \"$1\" \"$2\""; av[3] = (char *)(cmd ? cmd : "curl -fsSL -o");
+            av[4] = tmp; av[5] = (char *)url; av[6] = NULL;
+            if (run(av, NULL)) { unlink(tmp); continue; }
+            rename(tmp, file);
+            got = 1;
+        }
+        if (!got) die("could not fetch %s", r->url);
     }
-    sum = sha256_file(file);
-    if (!sum || strcmp(sum, r->sha)) {
-        say("%s: wrong sha256", r->id);
-        say("  recipe: %s", r->sha);
+    sum = dist_sum(r, file);
+    if (!sum || strcmp(sum, want)) {
+        say("%s: wrong %s", r->id, r->sha512 ? "sha512" : "sha256");
+        say("  recipe: %s", want);
         say("  file:   %s", sum ? sum : "unreadable");
         unlink(file);
         exit(1);

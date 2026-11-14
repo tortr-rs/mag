@@ -113,5 +113,46 @@ R
 $MAG install fails >"$T/out" 2>&1; check 'failing steps' 1 $?
 check 'not recorded' "" "$($MAG list | grep fails)"
 
+# pkgsrc packages: a Makefile and a distinfo, read in place
+mkdir -p "$T/repo/mk/fetch" "$T/repo/devel/hello" "$T/repo/devel/hello/patches" "$T/repo/devel/base" "$T/src/hello-2.1"
+printf 'MASTER_SITE_LOCAL+=\tfile://%s/src/\n' "$T" >"$T/repo/mk/fetch/sites.mk"
+printf 'all:\n\t@echo built\ninstall:\n\tmkdir -p $(DESTDIR)$(PREFIX)/share/hello\n\tcp hello.txt $(DESTDIR)$(PREFIX)/share/hello/hello.txt\n' >"$T/src/hello-2.1/Makefile"
+echo 'hello 2.1' >"$T/src/hello-2.1/hello.txt"
+tar -C "$T/src" -cf "$T/src/hello-2.1.tar" hello-2.1
+hsum=$(sha512sum "$T/src/hello-2.1.tar" | cut -d' ' -f1)
+cat >"$T/repo/devel/hello/Makefile" <<R
+# \$NetBSD\$
+
+DISTNAME=	hello-2.1
+CATEGORIES=	devel
+MASTER_SITES=	file://$T/src/
+EXTRACT_SUFX=	.tar
+COMMENT=	a pkgsrc test package
+DEPENDS+=	base>=1.0:../../devel/base
+MAKE_ENV+=	PREFIX=/usr
+.if \${OPSYS} == "Linux"
+MAKE_FLAGS+=	PREFIX=/usr
+.endif
+.include "../../mk/bsd.pkg.mk"
+R
+printf 'SHA512 (hello-2.1.tar) = %s\nSize (hello-2.1.tar) = 1 bytes\n' "$hsum" >"$T/repo/devel/hello/distinfo"
+printf 'DISTNAME=\tbase-1.0\nCOMMENT=\tthe base\nEXTRACT_SUFX=\t.tar\nMASTER_SITES=\tfile://%s/src/\n' "$T" >"$T/repo/devel/base/Makefile"
+mkdir -p "$T/src/base-1.0"; echo b >"$T/src/base-1.0/hello.txt"; printf 'install:\n\tmkdir -p $(DESTDIR)/usr/share/base\n\tcp hello.txt $(DESTDIR)/usr/share/base/\n' >"$T/src/base-1.0/Makefile"
+tar -C "$T/src" -cf "$T/src/base-1.0.tar" base-1.0
+printf 'SHA512 (base-1.0.tar) = %s\n' "$(sha512sum "$T/src/base-1.0.tar" | cut -d' ' -f1)" >"$T/repo/devel/base/distinfo"
+printf '%s\n' '$NetBSD$' '' '--- hello.txt.orig' '+++ hello.txt' '@@ -1 +1 @@' '-hello 2.1' '+hello patched' >"$T/repo/devel/hello/patches/patch-hello"
+check 'pkgsrc info' "devel/hello 2.1
+  a pkgsrc test package
+  source: file://$T/src/hello-2.1.tar
+  deps: devel/base
+  recipe: $T/repo/devel/hello/Makefile
+  not installed" "$($MAG info devel/hello)"
+$MAG install devel/hello >"$T/out" 2>&1; check 'pkgsrc install' 0 $?
+check 'pkgsrc patch' "hello patched" "$(cat "$T/root/usr/share/hello/hello.txt")"
+check 'pkgsrc dep' "b" "$(cat "$T/root/usr/share/base/hello.txt")"
+printf 'SHA512 (hello-2.1.tar) = %s\n' "0000" >"$T/repo/devel/hello/distinfo"
+rm -f "$T/root/var/cache/mag/hello-2.1.tar"
+$MAG remove hello >/dev/null 2>&1; $MAG install devel/hello >"$T/out" 2>&1; check 'pkgsrc wrong checksum' 1 $?
+
 echo "$pass passed, $fail failed"
 [ $fail = 0 ]
