@@ -517,7 +517,8 @@ static int cond_term(const struct vars *vs, char *t)
         e = expand(vs, tmp, 0);
         r = !*trim(e);
         free(e); free(tmp); free(a);
-    } else if (!strncmp(t, "exists(", 7) || !strncmp(t, "make(", 5) || !strncmp(t, "target(", 7)) r = 0;
+    } else if (!strncmp(t, "target(", 7)) { char *k; t[strlen(t) - 1] = 0; k = fmt("TARGET.%s", trim(t + 7)); r = var_get(vs, k) != NULL; free(k); }
+    else if (!strncmp(t, "exists(", 7) || !strncmp(t, "make(", 5)) r = 0;
     else {
         char *eq = strstr(t, "=="), *ne = strstr(t, "!="), *op = eq && (!ne || eq < ne) ? eq : ne;
         if (op) {
@@ -747,6 +748,8 @@ static void read_makefile(struct vars *vs, const char *file, const char *pkgdir,
                 } else if (!strncmp(inc, "../../mk/", 9) || !strncmp(inc, "../mk/", 6)) {
                     /* the framework is not read, but what it stands for can be a dependency: PROVIDES says which */
                     if (strstr(inc, ".buildlink3.mk")) { char *d = xstrdup(inc + 6); if (!has(bl, d)) push(bl, d); else free(d); }
+                } else if (strstr(inc, "lang/python/pyversion.mk")) {
+                } else if (strstr(inc, "devel/meson/build.mk")) { var_set(vs, "MAG_MESON", "yes");
                 } else if (inc[0] != '/') {
                     char *here = xstrdup(file), *sl = strrchr(here, '/'), *p;
                     if (sl) *sl = 0; else strcpy(here, ".");
@@ -845,7 +848,7 @@ static struct recipe *parse_pkgsrc(const char *id, const char *dir, const char *
     {
         static const char *const sh[][2] = {
             { "WRKDIR", "$SRC/.." }, { "FILESDIR", "$RECIPE_DIR/files" }, { "PATCHDIR", "patches" }, { "DESTDIR", "$DESTDIR" }, { "PREFIX", "$PREFIX" },
-            { "LOCALBASE", "$PREFIX" }, { "PKGMANDIR", "man" }, { "SETENV", "env" }, { "TOOLS_SHELL", "/bin/sh" }, { "SH", "/bin/sh" },
+            { "LOCALBASE", "$ROOT$PREFIX" }, { "PYTHON_VERSION", "312" }, { "PYPKGPREFIX", "py312" }, { "PYVERSSUFFIX", "3.12" }, { "PYTHONBIN", "python3.12" }, { "TOOL_PYTHONBIN", "python3.12" }, { "PYLIB", "lib/python3.12" }, { "PYSITELIB", "lib/python3.12/site-packages" }, { "BUILDLINK_PREFIX.openssl", "$ROOT$PREFIX" }, { "PKGMANDIR", "man" }, { "SETENV", "env" }, { "TOOLS_SHELL", "/bin/sh" }, { "SH", "/bin/sh" },
             { "CP", "cp" }, { "MV", "mv" }, { "RM", "rm" }, { "LN", "ln" }, { "MKDIR", "mkdir -p" }, { "ECHO", "echo" }, { "SED", "sed" },
             { "CHMOD", "chmod" }, { "TRUE", "true" }, { "CAT", "cat" }, { "TEST", "test" }, { "TOUCH", "touch" }, { "MAKE", "make" },
             { "BSD_INSTALL_PROGRAM", "install -m 755" }, { "BSD_INSTALL_PROGRAM_DIR", "install -d -m 755" }, { "BSD_INSTALL_SCRIPT", "install -m 755" }, { "BSD_INSTALL_SCRIPT_DIR", "install -d -m 755" }, { "BSD_INSTALL_LIB", "install -m 755" }, { "BSD_INSTALL_LIB_DIR", "install -d -m 755" }, { "BSD_INSTALL_DATA", "install -m 644" }, { "BSD_INSTALL_DATA_DIR", "install -d -m 755" }, { "BSD_INSTALL_MAN", "install -m 644" }, { "BSD_INSTALL_MAN_DIR", "install -d -m 755" }, { "BSD_INSTALL_GAME", "install -m 755" }, { "BSD_INSTALL_GAME_DIR", "install -d -m 755" }, { "INSTALL", "install" }, { "FIND", "find" }, { "ECHO_MSG", "echo" }, { "STEP_MSG", "echo" }, { "WARNING_MSG", "echo" }, { "PHASE_MSG", "echo" }, { "ERROR_MSG", "echo" }, { "FAIL_MSG", "echo" }, { "INFO_MSG", "echo" }, { "XARGS", "xargs" }, { "AWK", "awk" }, { "GREP", "grep" }, { "EGREP", "grep -E" }, { "HEAD", "head" }, { "TAIL", "tail" }, { "TR", "tr" }, { "SORT", "sort" }, { "WC", "wc" }, { "CMP", "cmp" }, { "DIFF", "diff" }, { "BASENAME", "basename" }, { "DIRNAME", "dirname" }, { "PWD", "pwd" }, { "TOOLS_PLATFORM.pwd", "/bin/pwd" }, { "INSTALL_PROGRAM", "install -m 755" }, { "INSTALL_LIB", "install -m 755" }, { "INSTALL_LIB_DIR", "install -d -m 755" }, { "INSTALL_GAME", "install -m 755" }, { "INSTALL_GAME_DATA", "install -m 644" }, { "INSTALL_SCRIPT", "install -m 755" }, { "INSTALL_DATA", "install -m 644" },
@@ -975,7 +978,7 @@ static struct recipe *parse_pkgsrc(const char *id, const char *dir, const char *
     /* the steps: patches, configure, build, install, each from the variables pkgsrc has for it */
     {
         const char *prefix_args = "";
-        char *cfg = var_get(&vs, "CONFIGURE_ARGS") ? expand(&vs, var_get(&vs, "CONFIGURE_ARGS"), 0) : xstrdup("");
+        char *cfg = var_get(&vs, var_get(&vs, "MAG_MESON") ? "MESON_ARGS" : "CONFIGURE_ARGS") ? expand(&vs, var_get(&vs, var_get(&vs, "MAG_MESON") ? "MESON_ARGS" : "CONFIGURE_ARGS"), 0) : xstrdup("");
         char *ckey = fmt("CONFIGURE_ARGS.%s", strrchr(id, '/') ? strrchr(id, '/') + 1 : id);
         if (conf_get(ckey)) cfg = fmt("%s %s", cfg, conf_get(ckey));
         free(ckey);
@@ -985,7 +988,7 @@ static struct recipe *parse_pkgsrc(const char *id, const char *dir, const char *
         char *btarget = var_get(&vs, "BUILD_TARGET") ? expand(&vs, var_get(&vs, "BUILD_TARGET"), 0) : xstrdup("");
         char *itarget = var_get(&vs, "INSTALL_TARGET") ? expand(&vs, var_get(&vs, "INSTALL_TARGET"), 0) : xstrdup("install");
         char *wrksrc = var_get(&vs, "WRKSRC") ? expand(&vs, var_get(&vs, "WRKSRC"), 0) : NULL;
-        int gnu = var_get(&vs, "GNU_CONFIGURE") != NULL, cmake = var_get(&vs, "USE_CMAKE") != NULL, hasconfig = gnu || var_get(&vs, "HAS_CONFIGURE") != NULL;
+        int gnu = var_get(&vs, "GNU_CONFIGURE") != NULL, cmake = var_get(&vs, "USE_CMAKE") != NULL, meson = var_get(&vs, "MAG_MESON") != NULL, hasconfig = gnu || var_get(&vs, "HAS_CONFIGURE") != NULL;
         const char *make = "bmake";
         char *pd = var_get(&vs, "PATCHDIR") ? expand(&vs, var_get(&vs, "PATCHDIR"), 0) : xstrdup("patches");
         size_t cap = 4096;
@@ -1018,15 +1021,36 @@ static struct recipe *parse_pkgsrc(const char *id, const char *dir, const char *
         }
         if (hook[1]) cmd += sprintf(cmd, "%s\n", hook[1]);
         cmd += sprintf(cmd, "P=patch; command -v nbpatch >/dev/null && P=nbpatch\nfor p in \"$RECIPE_DIR\"/%s/patch-*; do [ -f \"$p\" ] || continue; $P -p0 < \"$p\"; done\n", pd);
+        {
+            char *cls = var_get(&vs, "SUBST_CLASSES") ? expand(&vs, var_get(&vs, "SUBST_CLASSES"), 0) : NULL, *csave, *cw;
+            if (cls) for (cw = strtok_r(cls, " \t", &csave); cw; cw = strtok_r(NULL, " \t", &csave)) {
+                char *k = fmt("SUBST_STAGE.%s", cw), *st = var_get(&vs, k) ? expand(&vs, var_get(&vs, k), 0) : xstrdup("pre-configure"), *sed, *files, *vars, *vsave, *vw;
+                int ok = !strcmp(st, "pre-configure") || !strcmp(st, "post-patch") || !strcmp(st, "post-extract") || !strcmp(st, "pre-patch");
+                free(k); free(st);
+                if (!ok) continue;
+                k = fmt("SUBST_SED.%s", cw); sed = var_get(&vs, k) ? expand(&vs, var_get(&vs, k), 0) : xstrdup(""); free(k);
+                k = fmt("SUBST_FILES.%s", cw); files = var_get(&vs, k) ? expand(&vs, var_get(&vs, k), 0) : xstrdup(""); free(k);
+                k = fmt("SUBST_VARS.%s", cw); vars = var_get(&vs, k) ? expand(&vs, var_get(&vs, k), 0) : xstrdup(""); free(k);
+                { char *sv = xstrdup(sed); free(sed); sed = sv; }
+                for (vw = strtok_r(vars, " \t", &vsave); vw; vw = strtok_r(NULL, " \t", &vsave)) {
+                    char *ve = fmt("${%s}", vw), *val = expand(&vs, ve, 0), *tmp = fmt("%s -e \"s|@%s@|%s|g\"", sed, vw, val);
+                    free(ve); free(val); free(sed); sed = tmp;
+                }
+                if (*sed && *trim(files)) cmd += sprintf(cmd, "sed -i %s %s\n", sed, files);
+                free(sed); free(files); free(vars);
+            }
+            free(cls);
+        }
         if (hook[2]) cmd += sprintf(cmd, "%s\n", hook[2]);
         if (hook[3]) cmd += sprintf(cmd, "%s\n", hook[3]);
-        else if (hasconfig && !cmake) {
+        else if (hasconfig && !cmake && !meson) {
             const char *scr = var_get(&vs, "CONFIGURE_SCRIPT") ? var_get(&vs, "CONFIGURE_SCRIPT") : "./configure";
             if (gnu || !var_get(&vs, "CONFIGURE_SCRIPT")) cmd += sprintf(cmd, "%s %s %s %s --sysconfdir=/etc --localstatedir=/var %s\n", cenv, scr, strstr(cfg, "--prefix=") ? "" : "--prefix=$PREFIX", strstr(cfg, "--mandir=") ? "" : "--mandir=$PREFIX/man", cfg);
             else cmd += sprintf(cmd, "%s %s %s\n", cenv, scr, cfg);
         }
         if (hook[4]) cmd += sprintf(cmd, "%s\n", hook[4]);
-        if (cmake && !hook[3]) cmd += sprintf(cmd, "mkdir -p mag-build && cd mag-build && %s cmake -G Ninja -DCMAKE_INSTALL_PREFIX=$PREFIX %s ..\nsamu\n", cenv, cfg);
+        if (meson && !hook[3]) cmd += sprintf(cmd, "%s meson setup --prefix=$PREFIX --libdir=lib --libexecdir=libexec --mandir=man --sysconfdir=/etc --buildtype=plain --wrap-mode=nodownload \"-Dc_args=$CFLAGS $CPPFLAGS -Wno-unused-command-line-argument\" \"-Dc_link_args=$LDFLAGS\" %s . mag-build\nsamu -C mag-build\n", cenv, cfg);
+        else if (cmake && !hook[3]) cmd += sprintf(cmd, "mkdir -p mag-build && cd mag-build && %s cmake -G Ninja -DCMAKE_INSTALL_PREFIX=$PREFIX %s ..\nsamu\n", cenv, cfg);
         else {
             if (hook[5]) cmd += sprintf(cmd, "%s\n", hook[5]);
             if (hook[6]) cmd += sprintf(cmd, "%s\n", hook[6]);
@@ -1042,6 +1066,7 @@ static struct recipe *parse_pkgsrc(const char *id, const char *dir, const char *
         if (hook[8]) cmd += sprintf(cmd, "%s\n", hook[8]);
         if (hook[9]) cmd += sprintf(cmd, "%s\n", hook[9]);
         else if (cmake) cmd += sprintf(cmd, "DESTDIR=$DESTDIR samu install\n");
+        else if (meson) cmd += sprintf(cmd, "DESTDIR=$DESTDIR samu -C mag-build install\n");
         else cmd += sprintf(cmd, "%s %s DESTDIR=$DESTDIR %s %s\n", menv, make, mflags, itarget);
         if (hook[10]) cmd += sprintf(cmd, "%s\n", hook[10]);
         for (hi = 0; hn[hi]; hi++) free(hook[hi]);
@@ -1290,6 +1315,7 @@ static char *build(const struct recipe *r)
     setenv("VERSION", r->version, 1);
     setenv("RECIPE_DIR", r->dir, 1);
     setenv("PREFIX", prefix ? prefix : "/usr", 1);
+    setenv("ROOT", root, 1);
     if (*root) { char *m = fmt("%s/usr/share/mk", root); setenv("MAKESYSPATH", m, 1); free(m); }
     if (*root) {
         /* a root that is not / holds the dependencies: the compiler, the linker and the shell have to look there too */
@@ -1299,7 +1325,7 @@ static char *build(const struct recipe *r)
         v = fmt("-I%s/usr/include %s", root, cp ? cp : ""); setenv("CPPFLAGS", v, 1); free(v);
         v = fmt("-L%s/usr/lib %s", root, lf ? lf : ""); setenv("LDFLAGS", v, 1); free(v);
         v = fmt("-I%s/usr/include %s", root, getenv("CFLAGS") ? getenv("CFLAGS") : conf_get("CFLAGS") ? conf_get("CFLAGS") : "-O2"); setenv("CFLAGS", v, 1); free(v);
-        v = fmt("%s/usr/lib/pkgconfig:%s/usr/share/pkgconfig", root, root); setenv("PKG_CONFIG_PATH", v, 1); free(v);
+        v = fmt("%s/usr/lib/pkgconfig:%s/usr/share/pkgconfig", root, root); setenv("PKG_CONFIG_PATH", v, 1); setenv("PKG_CONFIG_LIBDIR", v, 1); setenv("PKG_CONFIG_SYSROOT_DIR", root, 1); free(v);
     }
     if (*root) {
         /* once the root has a musl in it, what is built there is built for it: clang aimed at the root, the loader and the libraries by their path in the root so the programs run on this machine too. mag relocate puts the real paths back */
@@ -1315,7 +1341,7 @@ static char *build(const struct recipe *r)
             free(pcopy);
             if (!real) die("no clang in PATH: it is the compiler for a musl root");
             mkpath(bin, 0755);
-            script = fmt("#!/bin/sh\nn=$#\nwhile [ $n -gt 0 ]; do x=$1; shift; n=$((n - 1)); case $x in -lgcc|-lgcc_s|-lgcc_eh) ;; *) set -- \"$@\" \"$x\";; esac; done\nexec %s --target=x86_64-linux-musl --sysroot=%s -fuse-ld=lld -rtlib=compiler-rt -nostdlibinc -isystem %s/usr/include -Wno-unused-command-line-argument -Wl,--dynamic-linker=%s -Wl,-rpath,%s/usr/lib \"$@\"\n", real, root, root, so, root);
+            script = fmt("#!/bin/sh\nn=$#\nwhile [ $n -gt 0 ]; do x=$1; shift; n=$((n - 1)); case $x in -lgcc|-lgcc_s|-lgcc_eh) ;; *) set -- \"$@\" \"$x\";; esac; done\nl=\"-fuse-ld=lld -rtlib=compiler-rt -Wl,--dynamic-linker=%s -Wl,-rpath,%s/usr/lib\"\ncase \" $* \" in *\" -c \"*|*\" -E \"*|*\" -S \"*) l=;; esac\nexec %s --target=x86_64-linux-musl --sysroot=%s -nostdlibinc -isystem %s/usr/include -Wno-unused-command-line-argument $l \"$@\"\n", so, root, real, root, root);
             { FILE *f = fopen(cc, "w"); if (!f) die("cannot write %s", cc); fputs(script, f); fclose(f); chmod(cc, 0755); }
             for (ni = 0; names[ni]; ni++) { char *l = fmt("%s/%s", bin, names[ni]); unlink(l); symlink("cc", l); free(l); }
             np = fmt("%s:%s", bin, getenv("PATH")); setenv("PATH", np, 1); free(np);
@@ -1356,7 +1382,7 @@ static void walk(const char *base, const char *rel, struct list *out)
         struct stat st;
         if (lstat(full, &st) < 0) die("cannot stat %s", full);
         if (S_ISDIR(st.st_mode)) walk(base, relp, out);
-        else push(out, relp);
+        else if (strcmp(relp, "usr/share/info/dir")) push(out, relp);
         free(full);
     }
     free(dir);
@@ -1513,7 +1539,7 @@ static void plan(const char *name, const char *from, struct list *order, struct 
     for (i = 0; i < r->deps.n; i++) {
         struct recipe *d = find_recipe(r->deps.v[i]);
         if (!d) die("no recipe for %s, wanted by %s", r->deps.v[i], r->id);
-        if (!installed(d->id)) plan(d->id, r->id, order, seen, stack);
+        if (strcmp(d->id, r->id) && !installed(d->id)) plan(d->id, r->id, order, seen, stack);
     }
     stack->n--;
     push(seen, r->id);
