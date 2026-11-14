@@ -4,6 +4,6 @@ url: https://cdn.kernel.org/pub/linux/utils/util-linux/v2.42/util-linux-${versio
 sha256: 3452b260bbaa775d6e749ac3bb22111785003fc1f444970025c8da26dfa758e9
 deps: sys-kernel/linux-headers devel/gmake
 steps:
-	./configure --prefix=$PREFIX --disable-shared --disable-nls --disable-liblastlog2 --disable-nsenter --without-python --without-systemd --without-udev --disable-makeinstall-chown --disable-makeinstall-setuid
+	./configure --prefix=$PREFIX --disable-shared --disable-nls --disable-liblastlog2 --disable-nsenter --without-ncurses --without-tinfo --without-readline --without-python --without-systemd --without-udev --disable-makeinstall-chown --disable-makeinstall-setuid
 	gmake -j$JOBS
 	gmake DESTDIR=$DESTDIR install
