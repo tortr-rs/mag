@@ -6,7 +6,7 @@ deps:
 steps:
 	make -j$JOBS PREFIX=$PREFIX
 	make PREFIX=$PREFIX DESTDIR=$DESTDIR install
-	# static only like everything else here. programs written for ncurses link -lcurses and nothing else, but setupterm lives in libterminfo
-	rm -f $DESTDIR$PREFIX/lib/*.so
+	# static, except libterminfo: tput and its friends need it. programs written for ncurses link -lcurses and nothing else, but setupterm lives in libterminfo
+	for f in $DESTDIR$PREFIX/lib/*.so*; do case $f in *libterminfo*) ;; *) rm -f $f;; esac; done
 	mv $DESTDIR$PREFIX/lib/libcurses.a $DESTDIR$PREFIX/lib/libcurses_real.a
 	echo "INPUT(libcurses_real.a libterminfo.a)" > $DESTDIR$PREFIX/lib/libcurses.a
