@@ -17,3 +17,5 @@ lang/perl5 -
 devel/libuuid sys-apps/util-linux
 devel/libblkid sys-apps/util-linux
 devel/readline -
+databases/gdbm -
+databases/gdbm_compat -
