@@ -792,7 +792,7 @@ static struct recipe *parse_pkgsrc(const char *id, const char *dir, const char *
             { "CHMOD", "chmod" }, { "TRUE", "true" }, { "CAT", "cat" }, { "TEST", "test" }, { "TOUCH", "touch" }, { "MAKE", "make" },
             { "INSTALL_PROGRAM", "install -m 755" }, { "INSTALL_LIB", "install -m 755" }, { "INSTALL_LIB_DIR", "install -d -m 755" }, { "INSTALL_GAME", "install -m 755" }, { "INSTALL_GAME_DATA", "install -m 644" }, { "INSTALL_SCRIPT", "install -m 755" }, { "INSTALL_DATA", "install -m 644" },
             { "INSTALL_MAN", "install -m 644" }, { "INSTALL_PROGRAM_DIR", "install -d -m 755" }, { "INSTALL_DATA_DIR", "install -d -m 755" },
-            { "INSTALL_SCRIPT_DIR", "install -d -m 755" }, { "INSTALL_MAN_DIR", "install -d -m 755" }, { "CC", "cc" }, { "LIBTOOL", "libtool" }, { "PKG_SYSCONFDIR", "/etc" }, { "VARBASE", "/var" }, { "MACHINE_GNU_ARCH", "x86_64" }, { "MACHINE_GNU_PLATFORM", "x86_64-pc-linux-gnu" }, { "PKG_SHELL", "" }, { "BINMODE", "755" }, { "NONBINMODE", "644" }, { "LIBMODE", "644" }, { "SHAREMODE", "644" }, { "MANMODE", "644" }, { "DIRMODE", "755" }, { "BINOWN", "root" }, { "BINGRP", "root" }, { "SHAREOWN", "root" }, { "SHAREGRP", "root" }, { "MANOWN", "root" }, { "MANGRP", "root" }, { "REAL_ROOT_USER", "root" }, { "REAL_ROOT_GROUP", "root" }, { "RUN", "" }, { "RCD_SCRIPTS_DIR", "/etc/rc.d" }, { NULL, NULL }
+            { "INSTALL_SCRIPT_DIR", "install -d -m 755" }, { "INSTALL_MAN_DIR", "install -d -m 755" }, { "CC", "cc" }, { "LIBTOOL", "libtool" }, { "PKG_SYSCONFDIR", "/etc" }, { "VARBASE", "/var" }, { "MACHINE_GNU_ARCH", "x86_64" }, { "MACHINE_GNU_PLATFORM", "x86_64-pc-linux-gnu" }, { "PKG_SHELL", "" }, { "BINMODE", "755" }, { "NONBINMODE", "644" }, { "LIBMODE", "644" }, { "SHAREMODE", "644" }, { "MANMODE", "644" }, { "DIRMODE", "755" }, { "BINOWN", "$(id -un)" }, { "BINGRP", "$(id -gn)" }, { "SHAREOWN", "$(id -un)" }, { "SHAREGRP", "$(id -gn)" }, { "MANOWN", "$(id -un)" }, { "MANGRP", "$(id -gn)" }, { "REAL_ROOT_USER", "root" }, { "REAL_ROOT_GROUP", "root" }, { "RUN", "" }, { "RCD_SCRIPTS_DIR", "/etc/rc.d" }, { NULL, NULL }
         };
         int k;
         for (k = 0; sh[k][0]; k++) var_set(&vs, sh[k][0], sh[k][1]);
@@ -917,7 +917,7 @@ static struct recipe *parse_pkgsrc(const char *id, const char *dir, const char *
     {
         const char *prefix_args = "";
         char *cfg = var_get(&vs, "CONFIGURE_ARGS") ? expand(&vs, var_get(&vs, "CONFIGURE_ARGS"), 0) : xstrdup("");
-        char *mflags = fmt("%s%s %s", var_get(&vs, "USE_LIBTOOL") ? "LIBTOOL=libtool " : "", var_get(&vs, "MAKE_FLAGS") ? expand(&vs, var_get(&vs, "MAKE_FLAGS"), 0) : "", var_get(&vs, "BUILD_MAKE_FLAGS") ? expand(&vs, var_get(&vs, "BUILD_MAKE_FLAGS"), 0) : "");
+        char *mflags = fmt("%s%s%s %s", var_get(&vs, "USE_BSD_MAKEFILE") ? "BINDIR=$PREFIX/bin MANDIR=$PREFIX/man LIBDIR=$PREFIX/lib BINOWN=$(id -un) BINGRP=$(id -gn) MANOWN=$(id -un) MANGRP=$(id -gn) LIBOWN=$(id -un) LIBGRP=$(id -gn) " : "", var_get(&vs, "USE_LIBTOOL") ? "LIBTOOL=libtool " : "", var_get(&vs, "MAKE_FLAGS") ? expand(&vs, var_get(&vs, "MAKE_FLAGS"), 0) : "", var_get(&vs, "BUILD_MAKE_FLAGS") ? expand(&vs, var_get(&vs, "BUILD_MAKE_FLAGS"), 0) : "");
         char *menv = var_get(&vs, "MAKE_ENV") ? expand(&vs, var_get(&vs, "MAKE_ENV"), 0) : xstrdup("");
         char *cenv = var_get(&vs, "CONFIGURE_ENV") ? expand(&vs, var_get(&vs, "CONFIGURE_ENV"), 0) : xstrdup("");
         char *btarget = var_get(&vs, "BUILD_TARGET") ? expand(&vs, var_get(&vs, "BUILD_TARGET"), 0) : xstrdup("");
