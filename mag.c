@@ -820,7 +820,7 @@ static struct recipe *parse_pkgsrc(const char *id, const char *dir, const char *
     sufx = expand(&vs, var_get(&vs, "EXTRACT_SUFX") ? var_get(&vs, "EXTRACT_SUFX") : ".tar.gz", 0);
     distfiles = var_get(&vs, "DISTFILES") ? expand(&vs, var_get(&vs, "DISTFILES"), 0) : fmt("%s%s", distname, sufx);
     sites = var_get(&vs, "MASTER_SITES") ? expand(&vs, var_get(&vs, "MASTER_SITES"), 0) : xstrdup("");
-    dfile = xstrdup(distfiles);
+    dfile = xstrdup(trim(distfiles));
     dfile[strcspn(dfile, " \t")] = 0;
     { char *c = strchr(dfile, ':'); if (c) *c = 0; }
     if (var_get(&vs, "DISTINFO_FILE")) { char *e = expand(&vs, var_get(&vs, "DISTINFO_FILE"), 0); free(di); di = e[0] == '/' ? e : fmt("%s/%s", dir, e); if (di != e) free(e); }
