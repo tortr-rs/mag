@@ -1769,7 +1769,15 @@ static void reloc_file(const char *path, const char *from, const char *to)
             i += tl;
         }
     }
-    if (changed) { FILE *f = fopen(path, "r+b"); if (f) { fwrite(buf, 1, len, f); fclose(f); } }
+    if (changed) {
+        struct stat st;
+        int ro = stat(path, &st) == 0 && !(st.st_mode & 0200);
+        FILE *f;
+        if (ro) chmod(path, st.st_mode | 0200);
+        f = fopen(path, "r+b");
+        if (f) { fwrite(buf, 1, len, f); fclose(f); }
+        if (ro) chmod(path, st.st_mode);
+    }
     free(buf);
 }
 static void reloc_walk(const char *dir, const char *from1, const char *to1, const char *from2, const char *to2)
