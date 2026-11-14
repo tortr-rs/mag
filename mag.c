@@ -1225,6 +1225,29 @@ static char *build(const struct recipe *r)
         v = fmt("-I%s/usr/include %s", root, getenv("CFLAGS") ? getenv("CFLAGS") : conf_get("CFLAGS") ? conf_get("CFLAGS") : "-O2"); setenv("CFLAGS", v, 1); free(v);
         v = fmt("%s/usr/lib/pkgconfig:%s/usr/share/pkgconfig", root, root); setenv("PKG_CONFIG_PATH", v, 1); free(v);
     }
+    if (*root) {
+        /* once the root has a musl in it, what is built there is built for it: clang aimed at the root, the loader and the libraries by their path in the root so the programs run on this machine too. mag relocate puts the real paths back */
+        char *crt = fmt("%s/usr/lib/crt1.o", root), *so = fmt("%s/usr/lib/libc.so", root);
+        if (exists(crt) && exists(so)) {
+            char *bin = fmt("%s/tools", work), *cc = fmt("%s/cc", bin), *real = NULL, *pa = getenv("PATH"), *pcopy = xstrdup(pa ? pa : "/usr/bin"), *tok, *sv, *script, *np;
+            static const char *const names[] = { "gcc", "clang", "c99", "cpp-unused", NULL };
+            int ni;
+            for (tok = strtok_r(pcopy, ":", &sv); tok && !real; tok = strtok_r(NULL, ":", &sv)) {
+                char *c = fmt("%s/clang", tok);
+                if (exists(c) && strncmp(tok, root, strlen(root))) real = c; else free(c);
+            }
+            free(pcopy);
+            if (!real) die("no clang in PATH: it is the compiler for a musl root");
+            mkpath(bin, 0755);
+            script = fmt("#!/bin/sh\nexec %s --target=x86_64-linux-musl --sysroot=%s -fuse-ld=lld -rtlib=compiler-rt -nostdlibinc -isystem %s/usr/include -Wno-unused-command-line-argument -Wl,--dynamic-linker=%s -Wl,-rpath,%s/usr/lib \"$@\"\n", real, root, root, so, root);
+            { FILE *f = fopen(cc, "w"); if (!f) die("cannot write %s", cc); fputs(script, f); fclose(f); chmod(cc, 0755); }
+            for (ni = 0; names[ni]; ni++) { char *l = fmt("%s/%s", bin, names[ni]); unlink(l); symlink("cc", l); free(l); }
+            np = fmt("%s:%s", bin, getenv("PATH")); setenv("PATH", np, 1); free(np);
+            setenv("CC", "cc", 1);
+            free(real); free(script); free(bin); free(cc);
+        }
+        free(crt); free(so);
+    }
     if (!jobs) jobs = conf_get("JOBS") ? conf_get("JOBS") : conf_get("MAKE_JOBS");
     setenv("JOBS", jobs ? jobs : "4", 1);
     {
@@ -1654,6 +1677,57 @@ static int cmd_fetch(int n, char **names)
     return 0;
 }
 
+/* programs built in a root carry its path as their loader and library path; this puts the ones a real system has back, in place and padded with NULs */
+static void reloc_file(const char *path, const char *from, const char *to)
+{
+    size_t len, fl = strlen(from), tl = strlen(to), i;
+    char *buf = slurp(path, &len);
+    int changed = 0;
+    if (!buf) return;
+    if (len < 64 || memcmp(buf, "\177ELF", 4)) { free(buf); return; }
+    for (i = 0; i + fl <= len; i++) {
+        if (buf[i] == from[0] && !memcmp(buf + i, from, fl)) {
+            size_t end = i + fl;
+            while (end < len && buf[end] && buf[end] != ':') end++;
+            memmove(buf + i + tl, buf + i + fl, end - (i + fl));
+            memcpy(buf + i, to, tl);
+            memset(buf + end - (fl - tl), 0, fl - tl);
+            changed = 1;
+            i += tl;
+        }
+    }
+    if (changed) { FILE *f = fopen(path, "r+b"); if (f) { fwrite(buf, 1, len, f); fclose(f); } }
+    free(buf);
+}
+static void reloc_walk(const char *dir, const char *from1, const char *to1, const char *from2, const char *to2)
+{
+    DIR *d = opendir(dir);
+    struct dirent *e;
+    if (!d) return;
+    while ((e = readdir(d))) {
+        char *p;
+        struct stat st;
+        if (!strcmp(e->d_name, ".") || !strcmp(e->d_name, "..")) continue;
+        p = fmt("%s/%s", dir, e->d_name);
+        if (lstat(p, &st) == 0) {
+            if (S_ISDIR(st.st_mode)) { if (strcmp(e->d_name, "tmp") && strcmp(e->d_name, "cache")) reloc_walk(p, from1, to1, from2, to2); }
+            else if (S_ISREG(st.st_mode) && st.st_size > 64) { reloc_file(p, from1, to1); reloc_file(p, from2, to2); }
+        }
+        free(p);
+    }
+    closedir(d);
+}
+static int cmd_relocate(void)
+{
+    char *so = fmt("%s/usr/lib/libc.so", root), *lib = fmt("%s/usr/lib", root), *skip = fmt("%s/var", root);
+    char *dirs[] = { "usr", "bin", "sbin", "lib", NULL };
+    int i;
+    (void)skip;
+    for (i = 0; dirs[i]; i++) { char *d = fmt("%s/%s", root, dirs[i]); reloc_walk(d, so, "/lib/ld-musl-x86_64.so.1", lib, "/usr/lib"); free(d); }
+    free(so); free(lib); free(skip);
+    return 0;
+}
+
 static int cmd_build(const char *name)
 {
     struct recipe *r = find_recipe(name);
@@ -1735,6 +1809,7 @@ int main(int argc, char **argv)
         else if (!strcmp(cmd, "rdeps") && n == 1) rc = cmd_deps(a[0], 1);
         else if (!strcmp(cmd, "fetch") && n) rc = cmd_fetch(n, a);
         else if (!strcmp(cmd, "build") && n == 1) rc = cmd_build(a[0]);
+        else if (!strcmp(cmd, "relocate") && n == 0) rc = cmd_relocate();
         else if (!strcmp(cmd, "hash") && n) rc = cmd_hash(n, a);
         else { say("'%s' with %d argument%s makes no sense, mag help says what there is", cmd, n, n == 1 ? "" : "s"); return 1; }
     }
