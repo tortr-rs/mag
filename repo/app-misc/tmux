@@ -1,9 +1,0 @@
-desc: terminal multiplexer
-version: 3.8
-url: https://github.com/tmux/tmux/releases/download/${version}/tmux-${version}.tar.gz
-sha256: e79c699c7e949dccd0a4a125e17b8d1261e311b16979dbc8eb34542f3966d82e
-deps: dev-libs/libevent dev-libs/netbsd-curses dev-build/byacc
-steps:
-	./configure --prefix=$PREFIX
-	make -j$JOBS
-	make DESTDIR=$DESTDIR install

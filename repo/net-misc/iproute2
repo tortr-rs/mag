@@ -2,7 +2,7 @@ desc: ip, ss, tc: the network tools of the kernel
 version: 7.3.0
 url: https://cdn.kernel.org/pub/linux/utils/net/iproute2/iproute2-${version}.tar.xz
 sha256: 5c1789d290bba048a6135ed1ab81b0402dd0fb528d1f1421765c42b1fc3d6289
-deps: dev-build/bison dev-build/flex dev-build/pkgconf
+deps: devel/bison devel/flex devel/pkgconf
 steps:
 	./configure
 	make -j$JOBS

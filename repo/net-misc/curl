@@ -1,9 +1,0 @@
-desc: URL transfer tool and libcurl
-version: 8.23.0
-url: https://curl.se/download/curl-${version}.tar.xz
-sha256: 8dadd7d2536a314f982ad05a651b713f426bf7d02cc2c76cffb9796f2218e6c5
-deps: dev-libs/libressl sys-libs/zlib app-arch/zstd
-steps:
-	./configure --prefix=$PREFIX --disable-shared --with-openssl --with-ca-bundle=/etc/ssl/cert.pem --without-libpsl --disable-ldap
-	make -j$JOBS
-	make DESTDIR=$DESTDIR install

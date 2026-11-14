@@ -1,9 +1,0 @@
-desc: event notification library
-version: 2.1.13-stable
-url: https://github.com/libevent/libevent/releases/download/release-${version}/libevent-${version}.tar.gz
-sha256: f7e9383b8c0baa81b687e5b5eecc01beefaf1b19b64151d95ed61647fe7a315c
-deps: dev-libs/libressl
-steps:
-	./configure --prefix=$PREFIX --disable-shared --disable-samples
-	make -j$JOBS
-	make DESTDIR=$DESTDIR install

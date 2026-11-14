@@ -1,9 +1,0 @@
-desc: mkfs.ext4, e2fsck and the ext tools
-version: 1.47.4
-url: https://cdn.kernel.org/pub/linux/kernel/people/tytso/e2fsprogs/v${version}/e2fsprogs-${version}.tar.xz
-sha256: fd5bf388cbdbe006a3d3b318d983b2948382440acc85a87f1e7d108653e8db0b
-deps: sys-apps/util-linux
-steps:
-	./configure --prefix=$PREFIX --sysconfdir=/etc --disable-nls --disable-fuse2fs --disable-uuidd --disable-libblkid --disable-libuuid
-	make -j$JOBS
-	make DESTDIR=$DESTDIR install

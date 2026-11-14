@@ -1,9 +1,0 @@
-desc: file type detection
-version: 5.48
-url: https://astron.com/pub/file/file-${version}.tar.gz
-sha256: ed14656883b23a364b4057c05595d93252da9bc473d30106519519d0da141283
-deps: sys-libs/zlib
-steps:
-	./configure --prefix=$PREFIX --disable-shared --disable-libseccomp --disable-bzlib --disable-xzlib --disable-zstdlib
-	make -j$JOBS
-	make DESTDIR=$DESTDIR install

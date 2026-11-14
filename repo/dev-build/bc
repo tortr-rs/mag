@@ -1,9 +1,0 @@
-desc: Gavin Howard's bc and dc
-version: 7.0.3
-url: https://github.com/gavinhoward/bc/releases/download/${version}/bc-${version}.tar.xz
-sha256: 91eb74caed0ee6655b669711a4f350c25579778694df248e28363318e03c7fc4
-deps:
-steps:
-	./configure.sh -G -O3 --prefix=$PREFIX --disable-nls
-	make -j$JOBS
-	make DESTDIR=$DESTDIR install

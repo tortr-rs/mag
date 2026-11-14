@@ -1,16 +1,13 @@
-desc: the kernel. built with clang and lld; gmake, flex, bison and bc are build tools for it and for nothing else
+desc: the Linux kernel and its modules, the Alpine linux-lts build (6.18 LTS)
 version: 6.18.63
-url: https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-${version}.tar.xz
-sha256: 81764a545072d160748beff4d9de2e7d95aa9f16e8261110288f067a2cc61d71
-deps: dev-build/gmake dev-build/bison dev-build/flex dev-build/bc dev-lang/perl dev-lang/llvm sys-apps/kmod
+url: https://dl-cdn.alpinelinux.org/alpine/v3.24/main/x86_64/linux-lts-${version}-r0.apk
+sha256: 6709cb3a85ce874efb85abd738f3232bfbc859a474f8b122e6ad1e3d5a25f99d
+deps:
 steps:
-	K="gmake LLVM=1 HOSTCC=clang -j$JOBS"
-	$K defconfig
-	scripts/config -d UNWINDER_ORC -e UNWINDER_FRAME_POINTER -d DEBUG_INFO_BTF -d MODULE_SIG -d SYSTEM_TRUSTED_KEYRING -d SYSTEM_REVOCATION_KEYS
-	scripts/config -e DEVTMPFS -e DEVTMPFS_MOUNT -e EFI_STUB -e FW_LOADER -e FW_LOADER_COMPRESS -e FW_LOADER_COMPRESS_ZSTD -e BLK_DEV_INITRD
-	$K olddefconfig
-	$K bzImage modules
-	install -Dm644 arch/x86/boot/bzImage $DESTDIR/boot/vmlinuz-$VERSION
-	install -Dm644 System.map $DESTDIR/boot/System.map-$VERSION
-	install -Dm644 .config $DESTDIR/boot/config-$VERSION
-	$K INSTALL_MOD_PATH=$DESTDIR modules_install
+	tar -xzf linux-lts-*.apk 2>/dev/null || true
+	kv=$(ls lib/modules)
+	install -Dm644 boot/vmlinuz-lts $DESTDIR/boot/vmlinuz-$kv
+	install -Dm644 boot/config-$kv $DESTDIR/boot/config-$kv
+	install -Dm644 boot/System.map-$kv $DESTDIR/boot/System.map-$kv
+	mkdir -p $DESTDIR/lib/modules
+	cp -R lib/modules/$kv $DESTDIR/lib/modules/

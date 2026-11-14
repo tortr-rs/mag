@@ -2,7 +2,7 @@ desc: nl80211 wireless configuration tool
 version: 6.17
 url: https://cdn.kernel.org/pub/software/network/iw/iw-${version}.tar.xz
 sha256: 7d182e498289ab39b257da6780d562e415377107f50358ee5b55b8cfe40b1e33
-deps: net-libs/libnl dev-build/pkgconf
+deps: net-libs/libnl devel/pkgconf
 steps:
 	make -j$JOBS
 	make PREFIX=$PREFIX DESTDIR=$DESTDIR install

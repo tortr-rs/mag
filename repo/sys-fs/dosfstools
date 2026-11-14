@@ -1,9 +1,0 @@
-desc: mkfs.fat and fsck.fat, for the EFI partition
-version: 4.2
-url: https://github.com/dosfstools/dosfstools/releases/download/v${version}/dosfstools-${version}.tar.gz
-sha256: 64926eebf90092dca21b14259a5301b7b98e7b1943e8a201c7d726084809b527
-deps:
-steps:
-	./configure --prefix=$PREFIX --without-udev
-	make -j$JOBS
-	make DESTDIR=$DESTDIR install

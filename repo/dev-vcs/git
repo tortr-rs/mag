@@ -1,8 +1,0 @@
-desc: the stupid content tracker
-version: 2.47.0
-url: https://mirrors.edge.kernel.org/pub/software/scm/git/git-${version}.tar.xz
-sha256: 1ce114da88704271b43e027c51e04d9399f8c88e9ef7542dae7aebae7d87bc4e
-deps: sys-libs/zlib
-steps:
-	make -j$JOBS prefix=$PREFIX NO_CURL=1 NO_EXPAT=1 NO_GETTEXT=1 NO_OPENSSL=1 NO_PERL=1 NO_PYTHON=1 NO_TCLTK=1 NO_INSTALL_HARDLINKS=1 all
-	make prefix=$PREFIX NO_CURL=1 NO_EXPAT=1 NO_GETTEXT=1 NO_OPENSSL=1 NO_PERL=1 NO_PYTHON=1 NO_TCLTK=1 NO_INSTALL_HARDLINKS=1 DESTDIR=$DESTDIR install
