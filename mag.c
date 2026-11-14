@@ -975,7 +975,7 @@ static struct recipe *parse_pkgsrc(const char *id, const char *dir, const char *
         {
             char *dirs = var_get(&vs, "INSTALLATION_DIRS") ? expand(&vs, var_get(&vs, "INSTALLATION_DIRS"), 0) : NULL;
             char *dsave, *dw;
-            if (dirs) for (dw = strtok_r(dirs, " \t", &dsave); dw; dw = strtok_r(NULL, " \t", &dsave)) cmd += sprintf(cmd, "mkdir -p $DESTDIR%s%s\n", dw[0] == '/' ? "" : "$PREFIX/", dw);
+            if (dirs) for (dw = strtok_r(dirs, " \t", &dsave); dw; dw = strtok_r(NULL, " \t", &dsave)) cmd += sprintf(cmd, "mkdir -p $DESTDIR%s%s\n", dw[0] == '/' || dw[0] == '$' ? "" : "$PREFIX/", dw);
             free(dirs);
         }
         if (hook[8]) cmd += sprintf(cmd, "%s\n", hook[8]);
