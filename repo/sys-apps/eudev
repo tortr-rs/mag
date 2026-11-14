@@ -2,8 +2,8 @@ desc: udev without systemd: device nodes and hotplug
 version: 3.3.0
 url: https://github.com/eudev-project/eudev/releases/download/v${version}/eudev-${version}.tar.gz
 sha256: 8fba6e4f49ea4b1938828a3c2e7cc48874816c68621386e527076b6477f5d6ef
-deps: sys-apps/kmod sys-apps/util-linux
+deps: dev-build/libtool devel/gmake sys-apps/kmod sys-apps/util-linux
 steps:
-	./configure --prefix=$PREFIX --sysconfdir=/etc --disable-shared --disable-manpages --disable-hwdb
-	make -j$JOBS
-	make DESTDIR=$DESTDIR install
+	./configure --prefix=$PREFIX --sysconfdir=/etc --disable-manpages --disable-hwdb
+	gmake -j$JOBS LIBTOOL=libtool
+	gmake LIBTOOL=libtool DESTDIR=$DESTDIR install
