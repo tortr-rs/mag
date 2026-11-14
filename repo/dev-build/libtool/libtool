@@ -7,6 +7,7 @@ mode=
 while [ $# -gt 0 ]; do
 	case $1 in
 	--mode=*) mode=${1#--mode=};;
+	--mode) shift; mode=$1;;
 	--tag=*|--quiet|--silent|--no-quiet|--no-silent|--debug|--dry-run) ;;
 	--version) echo "libtool (chamesle) 2.4.7"; exit 0;;
 	--features) echo "enable shared libraries"; echo "enable static libraries"; exit 0;;
