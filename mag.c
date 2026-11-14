@@ -942,7 +942,7 @@ static struct recipe *parse_pkgsrc(const char *id, const char *dir, const char *
         }
         free(c2);
     }
-    if (r->url && r->sha512) push(&r->alts, fmt("https://cdn.netbsd.org/pub/pkgsrc/distfiles/%s%s%s", var_get(&vs, "DIST_SUBDIR") ? var_get(&vs, "DIST_SUBDIR") : "", var_get(&vs, "DIST_SUBDIR") ? "/" : "", dfile));
+    if (r->url && r->sha512) push(&r->alts, fmt("https://ftp.netbsd.org/pub/pkgsrc/distfiles/%s%s%s", var_get(&vs, "DIST_SUBDIR") ? var_get(&vs, "DIST_SUBDIR") : "", var_get(&vs, "DIST_SUBDIR") ? "/" : "", dfile));
     /* the dependencies: DEPENDS and BUILD_DEPENDS lines look like pkg>=1.0:../../category/pkg, and buildlink3 includes */
     {
         static const char *const names[] = { "DEPENDS", "BUILD_DEPENDS", "TOOL_DEPENDS", "BUILD_TOOL_DEPENDS", NULL };
@@ -1777,7 +1777,7 @@ static int cmd_sync(void)
 {
     const char *url = getenv("MAG_SYNC_URL"), *cmd = getenv("MAG_FETCH");
     char *file = fmt("%s/var/cache/mag/pkgsrc.tar.xz", root), *part = fmt("%s.part", file), *tmp = fmt("%s/usr/pkgsrc.sync", root), *tree = fmt("%s/usr/pkgsrc", root), *from = fmt("%s/pkgsrc", tmp);
-    char *dl[] = { "/bin/sh", "-c", "set -f; $0 \"$1\" \"$2\"", (char *)(cmd ? cmd : "ftp -o"), part, (char *)(url ? url : "https://cdn.netbsd.org/pub/pkgsrc/current/pkgsrc.tar.xz"), NULL };
+    char *dl[] = { "/bin/sh", "-c", "set -f; $0 \"$1\" \"$2\"", (char *)(cmd ? cmd : "ftp -o"), part, (char *)(url ? url : "https://ftp.netbsd.org/pub/pkgsrc/current/pkgsrc.tar.xz"), NULL };
     char *un[] = { "tar", "-xf", file, "-C", tmp, NULL };
     char *rm[] = { "rm", "-rf", tree, NULL };
     char *dir = xstrdup(file);
