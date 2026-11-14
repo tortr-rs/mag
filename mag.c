@@ -817,6 +817,7 @@ static struct recipe *parse_pkgsrc(const char *id, const char *dir, const char *
     if (!var_get(&vs, "WRKSRC")) var_set(&vs, "WRKSRC", "${WRKDIR}/${DISTNAME}");
     if (var_get(&vs, "PKG_OPTIONS") && *var_get(&vs, "PKG_OPTIONS")) r->options = xstrdup(var_get(&vs, "PKG_OPTIONS"));
     r->desc = var_get(&vs, "COMMENT") ? expand(&vs, var_get(&vs, "COMMENT"), 0) : xstrdup("");
+    if (!var_get(&vs, "EXTRACT_SUFX")) var_set(&vs, "EXTRACT_SUFX", ".tar.gz");
     sufx = expand(&vs, var_get(&vs, "EXTRACT_SUFX") ? var_get(&vs, "EXTRACT_SUFX") : ".tar.gz", 0);
     distfiles = var_get(&vs, "DISTFILES") ? expand(&vs, var_get(&vs, "DISTFILES"), 0) : fmt("%s%s", distname, sufx);
     sites = var_get(&vs, "MASTER_SITES") ? expand(&vs, var_get(&vs, "MASTER_SITES"), 0) : xstrdup("");
