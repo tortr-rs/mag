@@ -1,0 +1,8 @@
+desc: NetBSD's sys/queue.h, the list and queue macros that musl does not have
+version: 20240512
+url: https://raw.githubusercontent.com/NetBSD/src/37caa6a62450429dc22bdf5fd7bc7c998c6db339/sys/sys/queue.h
+sha256: fd5cc829362a29cf3dd7a837cc07b68a9e50832af82248492ec8955aa9d3b262
+deps:
+steps:
+	install -d $DESTDIR$PREFIX/include/sys
+	install -m644 queue.h $DESTDIR$PREFIX/include/sys/queue.h
