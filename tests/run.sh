@@ -113,6 +113,21 @@ R
 $MAG install fails >"$T/out" 2>&1; check 'failing steps' 1 $?
 check 'not recorded' "" "$($MAG list | grep fails)"
 
+# pkgsrc builds with bmake: a stand-in that runs the host make
+mkdir -p "$T/repo/devel"
+sum=$(mktar bmake 1.0 "bmake 1.0")
+cat >"$T/repo/devel/bmake" <<R
+desc: bmake stand-in
+version: 1.0
+url: file://$T/src/bmake-\${version}.tar
+sha256: $sum
+deps:
+steps:
+	mkdir -p \$DESTDIR\$PREFIX/bin
+	printf '#!/bin/sh\nexec make "\$@"\n' >\$DESTDIR\$PREFIX/bin/bmake
+	chmod 755 \$DESTDIR\$PREFIX/bin/bmake
+R
+
 # pkgsrc packages: a Makefile and a distinfo, read in place
 mkdir -p "$T/repo/mk/fetch" "$T/repo/devel/hello" "$T/repo/devel/hello/patches" "$T/repo/devel/base" "$T/src/hello-2.1"
 printf 'MASTER_SITE_LOCAL+=\tfile://%s/src/\n' "$T" >"$T/repo/mk/fetch/sites.mk"
@@ -144,7 +159,7 @@ printf '%s\n' '$NetBSD$' '' '--- hello.txt.orig' '+++ hello.txt' '@@ -1 +1 @@' '
 check 'pkgsrc info' "devel/hello 2.1
   a pkgsrc test package
   source: file://$T/src/hello-2.1.tar
-  deps: devel/base
+  deps: devel/base devel/bmake
   recipe: $T/repo/devel/hello/Makefile
   not installed" "$($MAG info devel/hello)"
 $MAG install devel/hello >"$T/out" 2>&1; check 'pkgsrc install' 0 $?
@@ -174,10 +189,11 @@ DEPENDS+=	base>=1:../../devel/base
 R
 echo 'SHA512 (opt-1.0.tar.gz) = 00' >"$T/repo/devel/opt/distinfo"
 check 'options suggested' "  options: alpha beta" "$($MAG info devel/opt | grep '^  options:')"
-check 'options give a dep' "devel/base" "$($MAG deps devel/opt)"
+check 'options give a dep' "devel/base
+devel/bmake" "$($MAG deps devel/opt)"
 printf 'PKG_DEFAULT_OPTIONS=-beta gamma\n' >"$T/root/etc/mag.conf"
 check 'mag.conf default options' "  options: alpha gamma" "$($MAG info devel/opt | grep '^  options:')"
-check 'options off, dep gone' "" "$($MAG deps devel/opt)"
+check 'options off, dep gone' "devel/bmake" "$($MAG deps devel/opt)"
 printf 'PKG_DEFAULT_OPTIONS=-beta\nPKG_OPTIONS.opt=gamma -alpha\n' >"$T/root/etc/mag.conf"
 check 'package option variable' "  options: gamma" "$($MAG info devel/opt | grep '^  options:')"
 rm "$T/root/etc/mag.conf"

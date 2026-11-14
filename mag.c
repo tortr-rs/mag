@@ -781,7 +781,7 @@ static struct recipe *parse_pkgsrc(const char *id, const char *dir, const char *
             { "CHMOD", "chmod" }, { "TRUE", "true" }, { "CAT", "cat" }, { "TEST", "test" }, { "TOUCH", "touch" }, { "MAKE", "make" },
             { "INSTALL_PROGRAM", "install -m 755" }, { "INSTALL_SCRIPT", "install -m 755" }, { "INSTALL_DATA", "install -m 644" },
             { "INSTALL_MAN", "install -m 644" }, { "INSTALL_PROGRAM_DIR", "install -d -m 755" }, { "INSTALL_DATA_DIR", "install -d -m 755" },
-            { "INSTALL_SCRIPT_DIR", "install -d -m 755" }, { "INSTALL_MAN_DIR", "install -d -m 755" }, { "CC", "cc" }, { "LIBTOOL", "$SRC/.mag-libtool" }, { NULL, NULL }
+            { "INSTALL_SCRIPT_DIR", "install -d -m 755" }, { "INSTALL_MAN_DIR", "install -d -m 755" }, { "CC", "cc" }, { "LIBTOOL", "$SRC/.mag-libtool" }, { "PKG_SYSCONFDIR", "/etc" }, { "VARBASE", "/var" }, { "MACHINE_GNU_ARCH", "x86_64" }, { "MACHINE_GNU_PLATFORM", "x86_64-pc-linux-gnu" }, { "PKG_SHELL", "" }, { "REAL_ROOT_USER", "root" }, { "REAL_ROOT_GROUP", "root" }, { "RUN", "" }, { "RCD_SCRIPTS_DIR", "/etc/rc.d" }, { NULL, NULL }
         };
         int k;
         for (k = 0; sh[k][0]; k++) var_set(&vs, sh[k][0], sh[k][1]);
@@ -853,7 +853,7 @@ static struct recipe *parse_pkgsrc(const char *id, const char *dir, const char *
         }
         free(site1); free(base); free(key); free(ver);
     }
-    if (var_get(&vs, "DISTFILES") && !*trim(distfiles)) { free(r->url); r->url = NULL; r->alts.n = 0; }
+    if ((var_get(&vs, "DISTFILES") && !*trim(distfiles)) || (!r->sha512 && var_get(&vs, "TARGET.do-extract"))) { free(r->url); r->url = NULL; r->alts.n = 0; }
     else if (!r->url) {
         char *c2 = xstrdup(sites);
         for (tok = strtok_r(c2, " \t", &save); tok; tok = strtok_r(NULL, " \t", &save)) {
@@ -904,11 +904,13 @@ static struct recipe *parse_pkgsrc(const char *id, const char *dir, const char *
         char *itarget = var_get(&vs, "INSTALL_TARGET") ? expand(&vs, var_get(&vs, "INSTALL_TARGET"), 0) : xstrdup("install");
         char *wrksrc = var_get(&vs, "WRKSRC") ? expand(&vs, var_get(&vs, "WRKSRC"), 0) : NULL;
         int gnu = var_get(&vs, "GNU_CONFIGURE") != NULL, cmake = var_get(&vs, "USE_CMAKE") != NULL, hasconfig = gnu || var_get(&vs, "HAS_CONFIGURE") != NULL;
-        const char *make = "make";
+        const char *make = "bmake";
         char *pd = var_get(&vs, "PATCHDIR") ? expand(&vs, var_get(&vs, "PATCHDIR"), 0) : xstrdup("patches");
         size_t cap = 4096;
         (void)prefix_args;
         if ((g = var_get(&vs, "USE_TOOLS")) && strstr(g, "gmake")) make = "gmake";
+        else if (!var_get(&vs, "TARGET.do-build") && !var_get(&vs, "NO_BUILD") && strcmp(id, "devel/bmake")) dep_add(r, "devel/bmake");
+        var_set(&vs, "MAKE", make);
         { int ti; for (ti = 0; ti < vs.n; ti++) if (!strncmp(vs.k[ti], "TARGET.", 7)) cap += strlen(vs.v[ti]) * 4; }
         steps = xmalloc(cap + strlen(cfg) + strlen(mflags) + strlen(menv) + strlen(cenv) + 1024);
         steps[0] = 0;
@@ -941,7 +943,7 @@ static struct recipe *parse_pkgsrc(const char *id, const char *dir, const char *
         else {
             if (hook[5]) cmd += sprintf(cmd, "%s\n", hook[5]);
             if (hook[6]) cmd += sprintf(cmd, "%s\n", hook[6]);
-            else cmd += sprintf(cmd, "%s %s -j$JOBS %s %s\n", menv, make, mflags, btarget);
+            else if (!var_get(&vs, "NO_BUILD")) cmd += sprintf(cmd, "%s %s -j$JOBS %s %s\n", menv, make, mflags, btarget);
             if (hook[7]) cmd += sprintf(cmd, "%s\n", hook[7]);
         }
         {
@@ -1201,6 +1203,7 @@ static char *build(const struct recipe *r)
     setenv("VERSION", r->version, 1);
     setenv("RECIPE_DIR", r->dir, 1);
     setenv("PREFIX", prefix ? prefix : "/usr", 1);
+    if (*root) { char *m = fmt("%s/usr/share/mk", root); setenv("MAKESYSPATH", m, 1); free(m); }
     if (*root) {
         /* a root that is not / holds the dependencies: the compiler, the linker and the shell have to look there too */
         const char *pa = getenv("PATH"), *cp = getenv("CPPFLAGS"), *lf = getenv("LDFLAGS");

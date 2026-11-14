@@ -2,7 +2,6 @@
 converters/libiconv -
 devel/gettext-lib -
 devel/gettext-tools -
-pkgtools/bootstrap-mk-files -
 pkgtools/digest -
 mk/curses.buildlink3.mk dev-libs/netbsd-curses
 mk/termcap.buildlink3.mk dev-libs/netbsd-curses
