@@ -1248,7 +1248,7 @@ static char *build(const struct recipe *r)
             free(pcopy);
             if (!real) die("no clang in PATH: it is the compiler for a musl root");
             mkpath(bin, 0755);
-            script = fmt("#!/bin/sh\nexec %s --target=x86_64-linux-musl --sysroot=%s -fuse-ld=lld -rtlib=compiler-rt -nostdlibinc -isystem %s/usr/include -Wno-unused-command-line-argument -Wl,--dynamic-linker=%s -Wl,-rpath,%s/usr/lib \"$@\"\n", real, root, root, so, root);
+            script = fmt("#!/bin/sh\nn=$#\nwhile [ $n -gt 0 ]; do x=$1; shift; n=$((n - 1)); case $x in -lgcc|-lgcc_s|-lgcc_eh) ;; *) set -- \"$@\" \"$x\";; esac; done\nexec %s --target=x86_64-linux-musl --sysroot=%s -fuse-ld=lld -rtlib=compiler-rt -nostdlibinc -isystem %s/usr/include -Wno-unused-command-line-argument -Wl,--dynamic-linker=%s -Wl,-rpath,%s/usr/lib \"$@\"\n", real, root, root, so, root);
             { FILE *f = fopen(cc, "w"); if (!f) die("cannot write %s", cc); fputs(script, f); fclose(f); chmod(cc, 0755); }
             for (ni = 0; names[ni]; ni++) { char *l = fmt("%s/%s", bin, names[ni]); unlink(l); symlink("cc", l); free(l); }
             np = fmt("%s:%s", bin, getenv("PATH")); setenv("PATH", np, 1); free(np);
