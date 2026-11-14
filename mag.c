@@ -254,7 +254,7 @@ static char *sha512_file(const char *path)
 /* ---- recipes ---- */
 
 struct recipe {
-    char *id, *file, *dir, *desc, *version, *url, *sha, *sha512, *steps;
+    char *id, *file, *dir, *desc, *version, *url, *sha, *sha512, *steps, *cache;
     struct list deps, alts;
 };
 
@@ -660,7 +660,14 @@ static struct recipe *parse_pkgsrc(const char *id, const char *dir, const char *
     r->id = xstrdup(id); r->file = fmt("%s/Makefile", dir); r->dir = xstrdup(dir);
     distname = expand(&vs, var_get(&vs, "DISTNAME") ? var_get(&vs, "DISTNAME") : "${PKGNAME}", 0);
     pkgname = expand(&vs, var_get(&vs, "PKGNAME") ? var_get(&vs, "PKGNAME") : "${DISTNAME}", 0);
-    { char *dash = strrchr(pkgname, '-'); r->version = xstrdup(dash ? dash + 1 : "0"); }
+    {
+        char *dash = strrchr(pkgname, '-');
+        const char *rev = var_get(&vs, "PKGREVISION");
+        r->version = xstrdup(dash ? dash + 1 : "0");
+        var_set(&vs, "PKGVERSION_NOREV", r->version); var_set(&vs, "PKGNAME", pkgname); var_set(&vs, "DISTNAME", distname);
+        var_set(&vs, "PKGBASE", dash ? (x = strndup(pkgname, dash - pkgname), x) : pkgname); var_set(&vs, "PKGVERSION", r->version);
+        if (rev && *rev && strcmp(rev, "0")) { char *v2 = fmt("%snb%s", r->version, rev); free(r->version); r->version = v2; var_set(&vs, "PKGVERSION", v2); }
+    }
     r->desc = var_get(&vs, "COMMENT") ? expand(&vs, var_get(&vs, "COMMENT"), 0) : xstrdup("");
     sufx = expand(&vs, var_get(&vs, "EXTRACT_SUFX") ? var_get(&vs, "EXTRACT_SUFX") : ".tar.gz", 0);
     distfiles = var_get(&vs, "DISTFILES") ? expand(&vs, var_get(&vs, "DISTFILES"), 0) : fmt("%s%s", distname, sufx);
@@ -671,12 +678,47 @@ static struct recipe *parse_pkgsrc(const char *id, const char *dir, const char *
     dtext = slurp(di, NULL);
     free(di);
     r->sha512 = distinfo_hash(dtext, "SHA512", dfile);
-    for (tok = strtok_r(sites, " \t", &save); tok; tok = strtok_r(NULL, " \t", &save)) {
-        char *u;
-        if (strncmp(tok, "http", 4) && strncmp(tok, "ftp", 3) && strncmp(tok, "file:", 5)) continue;
-        u = fmt("%s%s%s", tok, tok[strlen(tok) - 1] == '/' ? "" : "/", dfile);
-        /* a github release name that does not end in the file name keeps what the Makefile wrote */
-        if (!r->url) r->url = u; else push(&r->alts, u);
+    {
+        /* github.mk: a site of the form https://github.com/account/ gets the project and tag or release put on by the framework */
+        char *site1 = xstrdup(sites), *sp = strchr(site1, ' ');
+        const char *proj = var_get(&vs, "GITHUB_PROJECT"), *tag = var_get(&vs, "GITHUB_TAG"), *rel = var_get(&vs, "GITHUB_RELEASE");
+        char *base = xstrdup(strrchr(id, '/') + 1), *ver = xstrdup(r->version), *nb;
+        char *key = fmt("SITES.%s", dfile);
+        const char *own = var_get(&vs, key);
+        if (sp) *sp = 0;
+        if ((nb = strstr(ver, "nb"))) *nb = 0;
+        if (!strncmp(site1, "https://github.com/", 19) && site1[strlen(site1) - 1] == '/' && strchr(site1 + 19, '/') == site1 + strlen(site1) - 1) {
+            char *p = proj ? expand(&vs, proj, 0) : xstrdup(base), *t = tag ? expand(&vs, tag, 0) : xstrdup(ver), *rl = rel ? expand(&vs, rel, 0) : NULL;
+            if (rl && *rl) r->url = fmt("%s%s/releases/download/%s/%s", site1, p, rl, dfile);
+            else {
+                size_t tl = strlen(t);
+                int hex = tl >= 7, i2;
+                for (i2 = 0; i2 < (int)tl; i2++) if (!isxdigit((unsigned char)t[i2]) || isupper((unsigned char)t[i2])) hex = 0;
+                if (hex && !var_get(&vs, "DISTFILES")) { char *d2 = fmt("%s-%s%s", distname, t, sufx); free(dfile); dfile = d2; }
+                r->url = fmt("%s%s/archive/%s%s", site1, p, t, sufx);
+                r->cache = xstrdup(dfile);
+            }
+            free(p); free(t); free(rl);
+        } else if (own) {
+            char *e = expand(&vs, own, 0), *sv2;
+            for (tok = strtok_r(e, " \t", &sv2); tok; tok = strtok_r(NULL, " \t", &sv2)) {
+                char *u = tok[0] == '-' ? xstrdup(tok + 1) : fmt("%s%s%s", tok, tok[strlen(tok) - 1] == '/' ? "" : "/", dfile);
+                if (!r->url) r->url = u; else push(&r->alts, u);
+                if (tok[0] == '-') r->cache = xstrdup(dfile);
+            }
+            free(e);
+        }
+        free(site1); free(base); free(key); free(ver);
+    }
+    if (!r->url) {
+        char *c2 = xstrdup(sites);
+        for (tok = strtok_r(c2, " \t", &save); tok; tok = strtok_r(NULL, " \t", &save)) {
+            char *u;
+            if (strncmp(tok, "http", 4) && strncmp(tok, "ftp", 3) && strncmp(tok, "file:", 5)) continue;
+            u = fmt("%s%s%s", tok, tok[strlen(tok) - 1] == '/' ? "" : "/", dfile);
+            if (!r->url) r->url = u; else push(&r->alts, u);
+        }
+        free(c2);
     }
     /* the dependencies: DEPENDS and BUILD_DEPENDS lines look like pkg>=1.0:../../category/pkg, and buildlink3 includes */
     {
@@ -880,7 +922,8 @@ static struct list rdeps(const char *id)
 
 static char *distfile(const struct recipe *r)
 {
-    const char *b = strrchr(r->url, '/');
+    const char *b = r->cache ? r->cache : strrchr(r->url, '/');
+    if (r->cache) return fmt("%s/var/cache/mag/%s", root, r->cache);
     return fmt("%s/var/cache/mag/%s", root, b ? b + 1 : r->url);
 }
 
