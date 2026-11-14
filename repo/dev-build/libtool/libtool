@@ -21,41 +21,39 @@ run() { [ -n "$LIBTOOL_VERBOSE" ] && echo "$*" >&2; "$@"; }
 
 compile() {
 	out= src= static=no
-	args=
-	while [ $# -gt 0 ]; do
-		case $1 in
-		-o) out=$2; shift;;
+	n=$#
+	while [ $n -gt 0 ]; do
+		a=$1; shift; n=$((n - 1))
+		case $a in
+		-o) out=$1; shift; n=$((n - 1));;
 		-static) static=yes;;
-		-shared|-prefer-pic|-prefer-non-pic|-no-suppress) ;;
-		-Wc,*) args="$args ${1#-Wc,}";;
-		-c) ;;
-		*.c|*.cc|*.cpp|*.cxx|*.S|*.s|*.m) src=$1; args="$args $1";;
-		*) args="$args $1";;
+		-shared|-prefer-pic|-prefer-non-pic|-no-suppress|-c) ;;
+		-Wc,*) set -- "$@" "${a#-Wc,}";;
+		*.c|*.cc|*.cpp|*.cxx|*.S|*.s|*.m) src=$a; set -- "$@" "$a";;
+		*) set -- "$@" "$a";;
 		esac
-		shift
 	done
 	[ -n "$out" ] || { b=${src##*/}; out=${b%.*}.lo; }
 	base=${out%.lo}
 	d=${base%/*}; [ "$d" = "$base" ] && d=.
 	n=${base##*/}
+	set -f
 	case $out in
 	*.lo)
 		mkdir -p "$d/.libs"
-		set -f
-		# shellcheck disable=SC2086
-		run $cc_cmd -c $args -o "$d/$n.o" || exit $?
+		run $cc_cmd -c "$@" -o "$d/$n.o" || exit $?
 		cat > "$out" <<LO
 # libtool object
 pic_object='.libs/$n.o'
 non_pic_object='$n.o'
 LO
 		if [ $static = no ]; then
-			run $cc_cmd -c -fPIC -DPIC $args -o "$d/.libs/$n.o" || exit $?
+			run $cc_cmd -c -fPIC -DPIC "$@" -o "$d/.libs/$n.o" || exit $?
 		else
 			echo "pic_object=none" >> "$out"
 		fi
 		;;
-	*) set -f; run $cc_cmd -c $args -o "$out" || exit $? ;;
+	*) run $cc_cmd -c "$@" -o "$out" || exit $? ;;
 	esac
 }
 
@@ -169,16 +167,15 @@ install_la() {
 }
 
 install_cmd() {
-	cmd=
+	cmd=$1; shift
 	while [ $# -gt 0 ]; do
 		case $1 in
-		-o|-g|-m) cmd="$cmd $1 $2"; shift;;
-		-*|install|cp|ginstall|"") cmd="$cmd $1";;
+		-o|-g|-m|-S|-f) cmd="$cmd $1 $2"; shift;;
+		-*) cmd="$cmd $1";;
 		*) break;;
 		esac
 		shift
 	done
-	[ -n "${cmd# }" ] || cmd=install
 	[ $# -ge 2 ] || { echo "libtool: install: need a source and a destination" >&2; exit 1; }
 	eval last=\${$#}
 	for a in "$@"; do

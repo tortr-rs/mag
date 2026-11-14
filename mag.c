@@ -438,6 +438,16 @@ static char *apply_mod(const struct vars *vs, char *val, const char *mod, size_t
                 *o = 0;
             }
         }
+    } else if (!strncmp(m, "ts", 2)) {
+        char sep = m[2] == '\\' && m[3] == 'n' ? '\n' : m[2] ? m[2] : (m[2] = 0, ' ');
+        int first = 1;
+        if (!m[2] && !strcmp(m, "ts")) sep = ' ';
+        for (w = strtok_r(copy, " \t", &save); w; w = strtok_r(NULL, " \t", &save)) { if (!first) *o++ = sep; o += sprintf(o, "%s", w); first = 0; }
+        *o = 0;
+    } else if (!strcmp(m, "Q")) {
+        const char *p;
+        for (p = copy; *p; p++) { if (strchr(" \t\n'\"\\$`&|;<>()*?[]#~!", *p)) *o++ = '\\'; *o++ = *p; }
+        *o = 0;
     } else if (!strcmp(m, "tl") || !strcmp(m, "tu")) {
         int up = m[1] == 'u';
         char *p;
@@ -472,6 +482,7 @@ static char *expand(const struct vars *vs, const char *s, int depth)
                 const char *me = name_end + 1;
                 int dd = 0;
                 while (me < p - 1 && (*me != ':' || dd)) { if (*me == '{') dd++; else if (*me == '}') dd--; me++; }
+                if (me - (name_end + 1) == 2 && !strncmp(name_end + 1, "ts", 2) && me < p - 1 && *me == ':') me++;
                 tmp = apply_mod(vs, val, name_end + 1, me - (name_end + 1), depth);
                 free(val); val = tmp;
                 name_end = me;
@@ -937,7 +948,7 @@ static struct recipe *parse_pkgsrc(const char *id, const char *dir, const char *
         cmd += sprintf(cmd, "for p in \"$RECIPE_DIR\"/%s/patch-*; do [ -f \"$p\" ] || continue; patch -p0 < \"$p\"; done\n", pd);
         if (hook[2]) cmd += sprintf(cmd, "%s\n", hook[2]);
         if (hook[3]) cmd += sprintf(cmd, "%s\n", hook[3]);
-        else if (hasconfig && !cmake) cmd += sprintf(cmd, "%s ./configure --prefix=$PREFIX %s\n", cenv, cfg);
+        else if (hasconfig && !cmake) cmd += sprintf(cmd, "%s ./configure --prefix=$PREFIX --mandir=$PREFIX/man --sysconfdir=/etc --localstatedir=/var %s\n", cenv, cfg);
         if (hook[4]) cmd += sprintf(cmd, "%s\n", hook[4]);
         if (cmake && !hook[3]) cmd += sprintf(cmd, "mkdir -p mag-build && cd mag-build && %s cmake -G Ninja -DCMAKE_INSTALL_PREFIX=$PREFIX %s ..\nsamu\n", cenv, cfg);
         else {
