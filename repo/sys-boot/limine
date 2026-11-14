@@ -5,6 +5,7 @@ sha256: 58ccb2bf39bdbda60cbbb2a2678c42e27a4424d6190a5f370e4e060bba20116b
 deps: devel/gmake
 steps:
 	unset CFLAGS CPPFLAGS LDFLAGS
-	./configure --prefix=$PREFIX --enable-uefi-x86-64 --enable-bios --enable-bios-cd
+	for d in /usr/lib/llvm/*/bin; do [ -x $d/clang ] && llvm=$d; done
+	./configure CC_FOR_TARGET=$llvm/clang LD_FOR_TARGET=$llvm/ld.lld OBJCOPY_FOR_TARGET=$llvm/llvm-objcopy --prefix=$PREFIX --enable-uefi-x86-64 --enable-bios --enable-bios-cd
 	gmake -j1
 	gmake DESTDIR=$DESTDIR install
