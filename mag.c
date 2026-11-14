@@ -719,6 +719,8 @@ static void read_makefile(struct vars *vs, const char *file, const char *pkgdir,
             else if (*p == '=') { op = "="; p++; }
             else { free(k); continue; }
             v = trim(p);
+            { char *h; for (h = v; *h; h++) if (*h == '#' && (h == v || h[-1] == ' ' || h[-1] == '\t')) { *h = 0; break; } }
+            v = trim(v);
         }
         if (!strcmp(op, "?=")) { if (!var_get(vs, k)) var_set(vs, k, v); }
         else if (!strcmp(op, "+=")) {
@@ -801,6 +803,7 @@ static struct recipe *parse_pkgsrc(const char *id, const char *dir, const char *
         var_set(&vs, "PKGBASE", dash ? (x = strndup(pkgname, dash - pkgname), x) : pkgname); var_set(&vs, "PKGVERSION", r->version);
         if (rev && *rev && strcmp(rev, "0")) { char *v2 = fmt("%snb%s", r->version, rev); free(r->version); r->version = v2; var_set(&vs, "PKGVERSION", v2); }
     }
+    if (!var_get(&vs, "WRKSRC")) var_set(&vs, "WRKSRC", "${WRKDIR}/${DISTNAME}");
     if (var_get(&vs, "PKG_OPTIONS") && *var_get(&vs, "PKG_OPTIONS")) r->options = xstrdup(var_get(&vs, "PKG_OPTIONS"));
     r->desc = var_get(&vs, "COMMENT") ? expand(&vs, var_get(&vs, "COMMENT"), 0) : xstrdup("");
     sufx = expand(&vs, var_get(&vs, "EXTRACT_SUFX") ? var_get(&vs, "EXTRACT_SUFX") : ".tar.gz", 0);
@@ -850,7 +853,8 @@ static struct recipe *parse_pkgsrc(const char *id, const char *dir, const char *
         }
         free(site1); free(base); free(key); free(ver);
     }
-    if (!r->url) {
+    if (var_get(&vs, "DISTFILES") && !*trim(distfiles)) { free(r->url); r->url = NULL; r->alts.n = 0; }
+    else if (!r->url) {
         char *c2 = xstrdup(sites);
         for (tok = strtok_r(c2, " \t", &save); tok; tok = strtok_r(NULL, " \t", &save)) {
             char *u;
@@ -883,6 +887,7 @@ static struct recipe *parse_pkgsrc(const char *id, const char *dir, const char *
         s = expand(&vs, g, 0);
         for (w = strtok_r(s, " \t", &save); w; w = strtok_r(NULL, " \t", &save)) {
             char *c = strchr(w, ':');
+            if (c && !strcmp(c + 1, "test")) continue;
             if (c) *c = 0;
             for (j = 0; tool_pkgs[j][0]; j++) if (!strcmp(w, tool_pkgs[j][0])) dep_add(r, tool_pkgs[j][1]);
         }
@@ -908,7 +913,7 @@ static struct recipe *parse_pkgsrc(const char *id, const char *dir, const char *
         steps = xmalloc(cap + strlen(cfg) + strlen(mflags) + strlen(menv) + strlen(cenv) + 1024);
         steps[0] = 0;
         cmd = steps;
-        cmd += sprintf(cmd, "ln -sfn src \"$SRC/../%s\"\n", distname);
+        if (!var_get(&vs, "TARGET.do-extract")) cmd += sprintf(cmd, "ln -sfn src \"$SRC/../%s\"\n", distname);
         cmd += sprintf(cmd, "printf '#!/bin/sh\\nwhile case $1 in --*) :;; *) false;; esac; do shift; done\\nexec \"$@\"\\n' > \"$SRC/.mag-libtool\"\nchmod +x \"$SRC/.mag-libtool\"\n");
         if (wrksrc && strstr(wrksrc, "/") ) {
             char *rel = strstr(wrksrc, distname);
