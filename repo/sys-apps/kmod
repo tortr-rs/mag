@@ -2,9 +2,9 @@ desc: kernel module tools: modprobe, insmod, lsmod
 version: 34.3
 url: https://cdn.kernel.org/pub/linux/utils/kernel/kmod/kmod-${version}.tar.xz
 sha256: 985554de49c21a58abd68c6cda2251384e1e5bb08b3b14c7f02b51f4c90c2958
-deps: archivers/zstd archivers/xz devel/zlib
+deps: archivers/zstd archivers/xz devel/zlib devel/pkgconf devel/gmake
 steps:
-	./configure --prefix=$PREFIX --sysconfdir=/etc --disable-shared --with-zstd --with-xz --with-zlib --disable-manpages
-	make -j$JOBS
-	make DESTDIR=$DESTDIR install
+	./configure --prefix=$PREFIX --sysconfdir=/etc --with-zstd --with-xz --with-zlib --disable-manpages
+	gmake -j$JOBS
+	gmake DESTDIR=$DESTDIR install
 	for t in depmod insmod lsmod modinfo modprobe rmmod; do ln -sf kmod $DESTDIR$PREFIX/bin/$t; done
