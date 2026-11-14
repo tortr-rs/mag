@@ -2,12 +2,12 @@ desc: network connection manager and nmcli
 version: 1.58.1
 url: https://gitlab.freedesktop.org/NetworkManager/NetworkManager/-/releases/${version}/downloads/NetworkManager-${version}.tar.xz
 sha256: 262864cfd198123d3e5dbe91937441b97ee9059d6d712e1a5bfbb1c54668d14d
-deps: sys-kernel/linux-headers devel/meson devel/ninja-build devel/pkgconf devel/glib2 sysutils/dbus net-libs/libndp sys-apps/eudev sys-apps/util-linux net/wpa_supplicant
+deps: sys-kernel/linux-headers devel/meson devel/samurai devel/pkgconf devel/glib2 sysutils/dbus net-libs/libndp sys-apps/eudev sys-apps/util-linux net/wpa_supplicant
 steps:
 	sed -i "s/find_program('perl')/find_program('perl', required: false)/" meson.build
 	sed -i "/^docbooks = \[/,/^\]/c docbooks = []" src/libnm-core-public/meson.build
 	meson setup build --prefix=$PREFIX --libdir=lib --libexecdir=lib --sysconfdir=/etc --localstatedir=/var --buildtype=release -Dsystemdsystemunitdir=no -Dudev_dir=/usr/lib/udev -Dsession_tracking=no -Dsession_tracking_consolekit=false -Dpolkit=false -Dselinux=false -Dsystemd_journal=false -Dlibaudit=no -Dwext=false -Dppp=false -Dmodem_manager=false -Dovs=false -Dnbft=false -Dclat=false -Debpf=false -Dnm_cloud_setup=false -Dnmtui=false -Dnmcli=true -Dconcheck=false -Dlibpsl=false -Dcrypto=null -Dreadline=none -Dintrospection=false -Dvapi=false -Dqt=false -Ddocs=false -Dman=false -Dtests=no -Difupdown=false -Dfirewalld_zone=false -Dconfig_dhcp_default=internal -Dconfig_plugins_default=keyfile -Dconfig_logging_backend_default=syslog -Dconfig_wifi_backend_default=wpa_supplicant -Ddnsmasq=/usr/bin/dnsmasq -Diptables=/usr/bin/iptables
-	ninja -C build
-	DESTDIR=$DESTDIR ninja -C build install
+	samu -C build
+	DESTDIR=$DESTDIR samu -C build install
 	mkdir -p $DESTDIR/etc/NetworkManager
 	printf '[main]\nplugins=keyfile\ndhcp=internal\n' > $DESTDIR/etc/NetworkManager/NetworkManager.conf
