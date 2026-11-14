@@ -1222,7 +1222,7 @@ static char *build(const struct recipe *r)
         v = fmt("%s/usr/bin:%s/bin:%s", root, root, pa ? pa : "/usr/bin:/bin"); setenv("PATH", v, 1); free(v);
         v = fmt("-I%s/usr/include %s", root, cp ? cp : ""); setenv("CPPFLAGS", v, 1); free(v);
         v = fmt("-L%s/usr/lib %s", root, lf ? lf : ""); setenv("LDFLAGS", v, 1); free(v);
-        v = fmt("-I%s/usr/include %s", root, getenv("CFLAGS") ? getenv("CFLAGS") : "-O2"); setenv("CFLAGS", v, 1); free(v);
+        v = fmt("-I%s/usr/include %s", root, getenv("CFLAGS") ? getenv("CFLAGS") : conf_get("CFLAGS") ? conf_get("CFLAGS") : "-O2"); setenv("CFLAGS", v, 1); free(v);
         v = fmt("%s/usr/lib/pkgconfig:%s/usr/share/pkgconfig", root, root); setenv("PKG_CONFIG_PATH", v, 1); free(v);
     }
     if (!jobs) jobs = conf_get("JOBS") ? conf_get("JOBS") : conf_get("MAKE_JOBS");
