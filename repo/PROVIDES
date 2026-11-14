@@ -19,3 +19,7 @@ devel/libblkid sys-apps/util-linux
 devel/readline -
 databases/gdbm -
 databases/gdbm_compat -
+devel/autoconf -
+devel/automake -
+converters/help2man -
+devel/p5-gettext -
