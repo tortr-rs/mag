@@ -172,6 +172,7 @@ VI
 		write_la "$out" "$dl" "$names" "$old" "$la_deps $dlibs" "$rpath" no
 		;;
 	*)
+		libs=$(echo "$libs" | sed 's/-Wl,--whole-archive//g; s/-Wl,--no-whole-archive//g')
 		run $cc_cmd -o "$out" $objs $libs $la_deps $flags || exit $?
 		;;
 	esac
