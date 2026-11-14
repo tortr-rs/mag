@@ -1,0 +1,9 @@
+desc: neighbor discovery protocol library for IPv6
+version: 1.9
+url: http://libndp.org/files/libndp-${version}.tar.gz
+sha256: a8ab214e01dc3a9b615276905395637f391298c84d77651f0cbf0b1082dd2dd4
+deps: devel/pkgconf
+steps:
+	./configure --prefix=$PREFIX --disable-static --disable-logging
+	make -j$JOBS
+	make DESTDIR=$DESTDIR install
