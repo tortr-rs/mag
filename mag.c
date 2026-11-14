@@ -628,13 +628,71 @@ static void load_conf(void)
 }
 static const char *conf_get(const char *k) { return var_get(&conf, k); }
 
+/* .for var in words ... .endfor: the body is written out once for each word, before the file is read */
+static char *unroll_for(char *text)
+{
+    size_t cap = strlen(text) * 4 + 64, n = 0;
+    char *out = xmalloc(cap), *p = text;
+    out[0] = 0;
+    while (*p) {
+        char *eol = strchr(p, '\n'), *l = p;
+        size_t len = eol ? (size_t)(eol - p) : strlen(p);
+        char *ln = xmalloc(len + 1);
+        memcpy(ln, p, len); ln[len] = 0;
+        l = ln; while (*l == ' ' || *l == '\t') l++;
+        if (!strncmp(l, ".for ", 5)) {
+            char *var = l + 5, *in = strstr(var, " in "), *body, *q, *words, *w, *sv;
+            int depth = 1;
+            size_t blen;
+            if (!in) { free(ln); break; }
+            *in = 0;
+            words = xstrdup(in + 4);
+            q = eol ? eol + 1 : p + len;
+            body = q;
+            while (*q) {
+                char *e2 = strchr(q, '\n'), *t = q;
+                while (*t == ' ' || *t == '\t') t++;
+                if (!strncmp(t, ".for ", 5)) depth++;
+                else if (!strncmp(t, ".endfor", 7) && !--depth) break;
+                q = e2 ? e2 + 1 : q + strlen(q);
+            }
+            blen = (size_t)(q - body);
+            for (w = strtok_r(words, " \t", &sv); w; w = strtok_r(NULL, " \t", &sv)) {
+                char *b = xmalloc(blen + 1), *r, *pat = fmt("${%s}", trim(var));
+                memcpy(b, body, blen); b[blen] = 0;
+                for (r = b; (r = strstr(r, pat)); ) {
+                    size_t pl = strlen(pat), wl = strlen(w), tail = strlen(r + pl) + 1;
+                    char *nb = xmalloc(strlen(b) + wl + 1);
+                    memcpy(nb, b, (size_t)(r - b)); memcpy(nb + (r - b), w, wl); memcpy(nb + (r - b) + wl, r + pl, tail);
+                    r = nb + (r - b) + wl; free(b); b = nb;
+                }
+                free(pat);
+                if (n + strlen(b) + 2 >= cap) { cap = (cap + strlen(b)) * 2; out = realloc(out, cap); }
+                strcpy(out + n, b); n += strlen(b); free(b);
+            }
+            free(words);
+            p = *q ? (strchr(q, '\n') ? strchr(q, '\n') + 1 : q + strlen(q)) : q;
+            free(ln);
+            continue;
+        }
+        if (n + len + 2 >= cap) { cap = (cap + len) * 2; out = realloc(out, cap); }
+        memcpy(out + n, p, len); n += len;
+        if (eol) out[n++] = '\n';
+        out[n] = 0;
+        p = eol ? eol + 1 : p + len;
+        free(ln);
+    }
+    return out;
+}
+
 static void read_makefile(struct vars *vs, const char *file, const char *pkgdir, const char *repo, struct list *bl, int depth)
 {
-    char *text = slurp(file, NULL), *line, *next;
+    char *text = slurp(file, NULL), *line, *next, *raw;
     int skip[32], taken[32], sp = 0;
     int i;
     char tgt[64] = "";
     if (!text || depth > 6) { free(text); return; }
+    raw = text; text = unroll_for(raw); free(raw);
     memset(skip, 0, sizeof skip); memset(taken, 0, sizeof taken);
     for (line = text; line; line = next) {
         char *l, *op, *k, *v;
