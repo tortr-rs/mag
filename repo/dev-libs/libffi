@@ -1,0 +1,9 @@
+desc: foreign function interface
+version: 3.8.1
+url: https://github.com/libffi/libffi/releases/download/v${version}/libffi-${version}.tar.gz
+sha256: 81e879c094cc5ec3186c48510c6385ac6b3e866192e8bc71a35245703757ee40
+deps: sys-libs/musl
+steps:
+	./configure --prefix=$PREFIX --disable-shared --disable-docs
+	make -j$JOBS
+	make DESTDIR=$DESTDIR install

@@ -1,0 +1,9 @@
+desc: python
+version: 3.15.2
+url: https://www.python.org/ftp/python/${version}/Python-${version}.tar.xz
+sha256: 8b5536d280142ecf6cdfe15d12a21ba1c65e300bbf7b28a8d0cdb849575797de
+deps: sys-libs/zlib app-arch/xz dev-libs/libffi dev-libs/expat dev-libs/libressl dev-build/pkgconf
+steps:
+	./configure --prefix=$PREFIX --without-ensurepip --with-system-expat --disable-test-modules
+	make -j$JOBS
+	make DESTDIR=$DESTDIR install

@@ -1,0 +1,9 @@
+desc: service manager and init
+version: 0.23.0
+url: https://github.com/davmac314/dinit/releases/download/v${version}/dinit-${version}.tar.xz
+sha256: b99067eb85f6e69c7e1411b6e0956ea1ae0831598bae5a4361ebef87317c326e
+deps: sys-libs/musl
+steps:
+	./configure --prefix=$PREFIX --sbindir=$PREFIX/bin --sysconfdir=/etc --disable-shutdown --unit-dir=/etc/dinit.d
+	make -j$JOBS
+	make DESTDIR=$DESTDIR install

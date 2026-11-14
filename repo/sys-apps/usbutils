@@ -1,0 +1,9 @@
+desc: lsusb
+version: 020
+url: https://cdn.kernel.org/pub/linux/utils/usb/usbutils/usbutils-${version}.tar.xz
+sha256: 20287d68fcd9ebb50a05ba0645a4af7583bd8dfc7307215ba121e4bc6d057aa1
+deps: sys-apps/eudev dev-build/samurai
+steps:
+	meson setup build --prefix=$PREFIX
+	samu -C build
+	DESTDIR=$DESTDIR samu -C build install

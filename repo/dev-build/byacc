@@ -1,0 +1,10 @@
+desc: Berkeley yacc, the parser generator that isn't bison
+version: 20260126
+url: https://invisible-mirror.net/archives/byacc/byacc-${version}.tgz
+sha256: b618c5fb44c2f5f048843db90f7d1b24f78f47b07913c8c7ba8c942d3eb24b00
+deps: sys-libs/musl
+steps:
+	./configure --prefix=$PREFIX --program-prefix=
+	make -j$JOBS
+	make DESTDIR=$DESTDIR install
+	ln -s yacc $DESTDIR$PREFIX/bin/byacc

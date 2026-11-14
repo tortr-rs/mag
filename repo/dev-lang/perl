@@ -1,0 +1,9 @@
+desc: perl. a build tool of the kernel and of a lot of ports
+version: 5.44.0
+url: https://www.cpan.org/src/5.0/perl-${version}.tar.xz
+sha256: 505cf43912e9480495c344c70260452e32aa2a73c546a026b3f100053b23ce91
+deps: sys-libs/musl
+steps:
+	sh Configure -des -Dprefix=$PREFIX -Dcc=clang -Uusedl -Dman1dir=none -Dman3dir=none
+	make -j$JOBS
+	make DESTDIR=$DESTDIR install

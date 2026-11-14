@@ -1,0 +1,9 @@
+desc: mount, fdisk, lsblk, losetup and the other basics from the kernel people
+version: 2.42
+url: https://cdn.kernel.org/pub/linux/utils/util-linux/v2.42/util-linux-${version}.tar.xz
+sha256: 3452b260bbaa775d6e749ac3bb22111785003fc1f444970025c8da26dfa758e9
+deps: sys-libs/musl
+steps:
+	./configure --prefix=$PREFIX --disable-shared --disable-nls --disable-liblastlog2 --without-python --without-systemd --without-udev --disable-makeinstall-chown --disable-makeinstall-setuid
+	make -j$JOBS
+	make DESTDIR=$DESTDIR install

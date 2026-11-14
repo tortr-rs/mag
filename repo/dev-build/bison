@@ -1,0 +1,9 @@
+desc: GNU bison. only a build tool of the kernel, nothing else may depend on it
+version: 3.8.2
+url: https://ftp.gnu.org/gnu/bison/bison-${version}.tar.xz
+sha256: 9bba0214ccf7f1079c5d59210045227bcf619519840ebfa80cd3849cff5a5bf2
+deps: dev-build/m4
+steps:
+	./configure --prefix=$PREFIX --disable-nls
+	make -j$JOBS
+	make DESTDIR=$DESTDIR install

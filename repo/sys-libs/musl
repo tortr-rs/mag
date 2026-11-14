@@ -1,0 +1,9 @@
+desc: the libc most of the ports build against. its Makefile needs gmake, so gmake is a build dep here as well as for the kernel
+version: 1.2.5
+url: https://musl.libc.org/releases/musl-${version}.tar.gz
+sha256: a9a118bbe84d8764da0ea0d28b3ab3fae8477fc7e4085d90102b8596fc7c75e4
+deps: dev-build/gmake
+steps:
+	CC=clang ./configure --prefix=$PREFIX --disable-shared
+	gmake -j$JOBS
+	gmake DESTDIR=$DESTDIR install

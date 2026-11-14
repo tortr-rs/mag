@@ -1,0 +1,9 @@
+desc: micro Emacs-style editor from OpenBSD
+version: 4.7
+url: https://github.com/troglobit/mg/releases/download/v${version}/mg-${version}.tar.gz
+sha256: c8a38ad43a260874a3b5471963253e1a4dbdaf251e71ff451bc1fef000d1166c
+deps: dev-libs/netbsd-curses
+steps:
+	./configure --prefix=$PREFIX
+	make -j$JOBS
+	make DESTDIR=$DESTDIR install

@@ -1,0 +1,9 @@
+desc: Intel Sound Open Firmware and topologies, for the sound card of most laptops since 2018
+version: 2026.09.2
+url: https://github.com/thesofproject/sof-bin/releases/download/v${version}/sof-bin-${version}.tar.gz
+sha256: 5f7bc30b2b5c1e6b0da55a33fc44e2b7f56ae9b06952edcde614f51ef6b943e1
+deps:
+steps:
+	mkdir -p $DESTDIR/lib/firmware/intel
+	for d in sof sof-ipc4 sof-ipc4-lib sof-ipc4-tplg sof-ace-tplg sof-tplg; do [ -d $d ] && cp -R $d $DESTDIR/lib/firmware/intel/; done
+	install -Dm644 LICENCE.Intel $DESTDIR/lib/firmware/intel/LICENCE.sof

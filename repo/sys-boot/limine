@@ -1,0 +1,9 @@
+desc: the bootloader, BIOS and UEFI
+version: 12.10.0
+url: https://github.com/limine-bootloader/limine/releases/download/v${version}/limine-${version}.tar.xz
+sha256: 58ccb2bf39bdbda60cbbb2a2678c42e27a4424d6190a5f370e4e060bba20116b
+deps: sys-libs/musl
+steps:
+	./configure --prefix=$PREFIX --enable-uefi-x86-64 --enable-bios --enable-bios-cd
+	make -j$JOBS
+	make DESTDIR=$DESTDIR install

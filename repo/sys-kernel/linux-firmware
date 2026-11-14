@@ -1,0 +1,8 @@
+desc: firmware blobs for wifi, graphics, ethernet and the rest, compressed with zstd
+version: 20261019
+url: https://cdn.kernel.org/pub/linux/kernel/firmware/linux-firmware-${version}.tar.xz
+sha256: a10d1ab5baf2c74ba92e8c7cf313e691696c26bddfa6df00db795e48d70cd4ca
+deps: app-arch/zstd
+steps:
+	install -d $DESTDIR/lib/firmware
+	./copy-firmware.sh --zstd $DESTDIR/lib/firmware

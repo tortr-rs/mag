@@ -1,0 +1,9 @@
+desc: GNU m4. only a build tool of the kernel (through bison and flex), nothing else may depend on it
+version: 1.4.20
+url: https://ftp.gnu.org/gnu/m4/m4-${version}.tar.xz
+sha256: e236ea3a1ccf5f6c270b1c4bb60726f371fa49459a8eaaebc90b216b328daf2b
+deps: sys-libs/musl
+steps:
+	./configure --prefix=$PREFIX --disable-nls
+	make -j$JOBS
+	make DESTDIR=$DESTDIR install

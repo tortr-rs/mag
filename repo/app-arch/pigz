@@ -1,0 +1,11 @@
+desc: parallel gzip
+version: 2.8
+url: https://zlib.net/pigz/pigz-${version}.tar.gz
+sha256: eb872b4f0e1f0ebe59c9f7bd8c506c4204893ba6a8492de31df416f0d5170fd0
+deps: sys-libs/zlib
+steps:
+	make -j$JOBS
+	install -D pigz $DESTDIR$PREFIX/bin/pigz
+	ln -s pigz $DESTDIR$PREFIX/bin/unpigz
+	ln -s pigz $DESTDIR$PREFIX/bin/gzip
+	ln -s pigz $DESTDIR$PREFIX/bin/gunzip

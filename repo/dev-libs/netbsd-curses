@@ -1,0 +1,8 @@
+desc: curses from NetBSD, the ncurses that is not GNU
+version: 0.3.2
+url: http://ftp.barfooze.de/pub/sabotage/tarballs/netbsd-curses-${version}.tar.xz
+sha256: d28358b833e6cabcf229fecef98c649e2e90c29858aa34220476faf0e5ce10a1
+deps: sys-libs/musl
+steps:
+	make -j$JOBS PREFIX=$PREFIX
+	make PREFIX=$PREFIX DESTDIR=$DESTDIR install
