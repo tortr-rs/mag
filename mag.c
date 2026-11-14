@@ -1790,9 +1790,10 @@ static void reloc_walk(const char *dir, const char *from1, const char *to1, cons
     }
     closedir(d);
 }
-static int cmd_relocate(void)
+static int cmd_relocate(const char *from)
 {
-    char *so = fmt("%s/usr/lib/libc.so", root), *lib = fmt("%s/usr/lib", root), *skip = fmt("%s/var", root);
+    const char *base = from ? from : root;
+    char *so = fmt("%s/usr/lib/libc.so", base), *lib = fmt("%s/usr/lib", base), *skip = fmt("%s/var", root);
     char *dirs[] = { "usr", "bin", "sbin", "lib", NULL };
     int i;
     (void)skip;
@@ -1882,7 +1883,7 @@ int main(int argc, char **argv)
         else if (!strcmp(cmd, "rdeps") && n == 1) rc = cmd_deps(a[0], 1);
         else if (!strcmp(cmd, "fetch") && n) rc = cmd_fetch(n, a);
         else if (!strcmp(cmd, "build") && n == 1) rc = cmd_build(a[0]);
-        else if (!strcmp(cmd, "relocate") && n == 0) rc = cmd_relocate();
+        else if (!strcmp(cmd, "relocate") && n <= 1) rc = cmd_relocate(n ? a[0] : NULL);
         else if (!strcmp(cmd, "hash") && n) rc = cmd_hash(n, a);
         else { say("'%s' with %d argument%s makes no sense, mag help says what there is", cmd, n, n == 1 ? "" : "s"); return 1; }
     }
