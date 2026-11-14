@@ -6,5 +6,6 @@ deps: dev-build/libtool archivers/zstd archivers/xz devel/zlib devel/pkgconf dev
 steps:
 	./configure --prefix=$PREFIX --sysconfdir=/etc --with-zstd --with-xz --with-zlib --disable-manpages
 	gmake -j$JOBS LIBTOOL=libtool
-	gmake LIBTOOL=libtool DESTDIR=$DESTDIR install
-	for t in depmod insmod lsmod modinfo modprobe rmmod; do ln -sf kmod $DESTDIR$PREFIX/bin/$t; done
+	gmake -o install-exec-hook LIBTOOL=libtool DESTDIR=$DESTDIR install
+	mkdir -p $DESTDIR$PREFIX/sbin
+	for t in depmod insmod lsmod modinfo modprobe rmmod; do ln -sf kmod $DESTDIR$PREFIX/bin/$t; ln -sf ../bin/kmod $DESTDIR$PREFIX/sbin/$t; done
