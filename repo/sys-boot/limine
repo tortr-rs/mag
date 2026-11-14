@@ -6,8 +6,6 @@ deps: devel/gmake
 steps:
 	unset CFLAGS CPPFLAGS LDFLAGS
 	for d in /usr/lib/llvm/*/bin; do [ -x $d/clang ] && llvm=$d; done
-	./configure CC_FOR_TARGET=$llvm/clang LD_FOR_TARGET=$llvm/ld.lld OBJCOPY_FOR_TARGET=$llvm/llvm-objcopy --prefix=$PREFIX --enable-uefi-x86-64 --enable-bios --enable-bios-cd
+	./configure CC_FOR_TARGET=$llvm/clang LD_FOR_TARGET=$llvm/ld.lld OBJCOPY_FOR_TARGET=$llvm/llvm-objcopy --prefix=$PREFIX --enable-uefi-x86-64 --enable-bios --enable-bios-cd --enable-uefi-cd
 	gmake -j1
 	gmake DESTDIR=$DESTDIR install
-	gmake bin/limine-uefi-cd.bin
-	install -m 644 bin/limine-uefi-cd.bin $DESTDIR$PREFIX/share/limine/
