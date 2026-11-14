@@ -622,6 +622,7 @@ static void read_makefile(struct vars *vs, const char *file, const char *pkgdir,
     char *text = slurp(file, NULL), *line, *next;
     int skip[32], taken[32], sp = 0;
     int i;
+    char tgt[64] = "";
     if (!text || depth > 6) { free(text); return; }
     memset(skip, 0, sizeof skip); memset(taken, 0, sizeof taken);
     for (line = text; line; line = next) {
@@ -638,6 +639,7 @@ static void read_makefile(struct vars *vs, const char *file, const char *pkgdir,
             next = n2 ? n2 + 1 : NULL;
             if (!n2) break;
         }
+        int tabbed = line[0] == '\t';
         l = trim(line);
         if (*l == '#' || !*l) continue;
         if (*l == '.') {
@@ -690,6 +692,20 @@ static void read_makefile(struct vars *vs, const char *file, const char *pkgdir,
         }
         for (i = 0; i < sp; i++) if (skip[i]) break;
         if (i < sp) continue;
+        if (tabbed && *tgt) {
+            char *key = fmt("TARGET.%s", tgt);
+            const char *old = var_get(vs, key);
+            char *nv;
+            while (*l == '@' || *l == '-') l++;
+            nv = old ? fmt("%s\n%s", old, l) : xstrdup(l);
+            var_set(vs, key, nv); free(nv); free(key);
+            continue;
+        }
+        tgt[0] = 0;
+        if (!strncmp(l, "do-", 3) || !strncmp(l, "pre-", 4) || !strncmp(l, "post-", 5)) {
+            char *c = strchr(l, ':');
+            if (c && c[1] != '=' && !strchr(l, ' ') ) { snprintf(tgt, sizeof tgt, "%.*s", (int)(c - l), l); continue; }
+        }
         /* VAR op value */
         {
             char *p = l;
@@ -755,6 +771,19 @@ static struct recipe *parse_pkgsrc(const char *id, const char *dir, const char *
     var_set(&vs, "MACHINE_PLATFORM", "Linux-x86_64"); var_set(&vs, "PKGSRC_COMPILER", "clang"); var_set(&vs, "OPSYS_VERSION", "0");
     { int ci; for (ci = 0; ci < conf.n; ci++) var_set(&vs, conf.k[ci], conf.v[ci]); }
     var_set(&vs, ".CURDIR", dir); var_set(&vs, "PKGSRCDIR", repo);
+    {
+        static const char *const sh[][2] = {
+            { "WRKDIR", "$SRC/.." }, { "FILESDIR", "$RECIPE_DIR/files" }, { "PATCHDIR", "patches" }, { "DESTDIR", "$DESTDIR" }, { "PREFIX", "$PREFIX" },
+            { "LOCALBASE", "$PREFIX" }, { "PKGMANDIR", "man" }, { "SETENV", "env" }, { "TOOLS_SHELL", "/bin/sh" }, { "SH", "/bin/sh" },
+            { "CP", "cp" }, { "MV", "mv" }, { "RM", "rm" }, { "LN", "ln" }, { "MKDIR", "mkdir -p" }, { "ECHO", "echo" }, { "SED", "sed" },
+            { "CHMOD", "chmod" }, { "TRUE", "true" }, { "CAT", "cat" }, { "TEST", "test" }, { "TOUCH", "touch" }, { "MAKE", "make" },
+            { "INSTALL_PROGRAM", "install -m 755" }, { "INSTALL_SCRIPT", "install -m 755" }, { "INSTALL_DATA", "install -m 644" },
+            { "INSTALL_MAN", "install -m 644" }, { "INSTALL_PROGRAM_DIR", "install -d -m 755" }, { "INSTALL_DATA_DIR", "install -d -m 755" },
+            { "INSTALL_SCRIPT_DIR", "install -d -m 755" }, { "INSTALL_MAN_DIR", "install -d -m 755" }, { "CC", "cc" }, { "LIBTOOL", "$SRC/.mag-libtool" }, { NULL, NULL }
+        };
+        int k;
+        for (k = 0; sh[k][0]; k++) var_set(&vs, sh[k][0], sh[k][1]);
+    }
     load_sites(&vs, repo);
     read_makefile(&vs, mf, dir, repo, &bl, 0);
     free(mf);
@@ -783,7 +812,12 @@ static struct recipe *parse_pkgsrc(const char *id, const char *dir, const char *
     if (var_get(&vs, "DISTINFO_FILE")) { char *e = expand(&vs, var_get(&vs, "DISTINFO_FILE"), 0); free(di); di = e[0] == '/' ? e : fmt("%s/%s", dir, e); if (di != e) free(e); }
     dtext = slurp(di, NULL);
     free(di);
-    r->sha512 = distinfo_hash(dtext, "SHA512", dfile);
+    {
+        const char *sub = var_get(&vs, "DIST_SUBDIR");
+        char *dkey = sub ? fmt("%s/%s", sub, dfile) : xstrdup(dfile);
+        r->sha512 = distinfo_hash(dtext, "SHA512", dkey);
+        free(dkey);
+    }
     {
         /* github.mk: a site of the form https://github.com/account/ gets the project and tag or release put on by the framework */
         char *site1 = xstrdup(sites), *sp = strchr(site1, ' ');
@@ -826,6 +860,7 @@ static struct recipe *parse_pkgsrc(const char *id, const char *dir, const char *
         }
         free(c2);
     }
+    if (r->url && r->sha512) push(&r->alts, fmt("https://cdn.netbsd.org/pub/pkgsrc/distfiles/%s%s%s", var_get(&vs, "DIST_SUBDIR") ? var_get(&vs, "DIST_SUBDIR") : "", var_get(&vs, "DIST_SUBDIR") ? "/" : "", dfile));
     /* the dependencies: DEPENDS and BUILD_DEPENDS lines look like pkg>=1.0:../../category/pkg, and buildlink3 includes */
     {
         static const char *const names[] = { "DEPENDS", "BUILD_DEPENDS", "TOOL_DEPENDS", "BUILD_TOOL_DEPENDS", NULL };
@@ -857,7 +892,7 @@ static struct recipe *parse_pkgsrc(const char *id, const char *dir, const char *
     {
         const char *prefix_args = "";
         char *cfg = var_get(&vs, "CONFIGURE_ARGS") ? expand(&vs, var_get(&vs, "CONFIGURE_ARGS"), 0) : xstrdup("");
-        char *mflags = var_get(&vs, "MAKE_FLAGS") ? expand(&vs, var_get(&vs, "MAKE_FLAGS"), 0) : xstrdup("");
+        char *mflags = fmt("%s%s %s", var_get(&vs, "USE_LIBTOOL") ? "LIBTOOL=$SRC/.mag-libtool " : "", var_get(&vs, "MAKE_FLAGS") ? expand(&vs, var_get(&vs, "MAKE_FLAGS"), 0) : "", var_get(&vs, "BUILD_MAKE_FLAGS") ? expand(&vs, var_get(&vs, "BUILD_MAKE_FLAGS"), 0) : "");
         char *menv = var_get(&vs, "MAKE_ENV") ? expand(&vs, var_get(&vs, "MAKE_ENV"), 0) : xstrdup("");
         char *cenv = var_get(&vs, "CONFIGURE_ENV") ? expand(&vs, var_get(&vs, "CONFIGURE_ENV"), 0) : xstrdup("");
         char *btarget = var_get(&vs, "BUILD_TARGET") ? expand(&vs, var_get(&vs, "BUILD_TARGET"), 0) : xstrdup("");
@@ -869,21 +904,54 @@ static struct recipe *parse_pkgsrc(const char *id, const char *dir, const char *
         size_t cap = 4096;
         (void)prefix_args;
         if ((g = var_get(&vs, "USE_TOOLS")) && strstr(g, "gmake")) make = "gmake";
+        { int ti; for (ti = 0; ti < vs.n; ti++) if (!strncmp(vs.k[ti], "TARGET.", 7)) cap += strlen(vs.v[ti]) * 4; }
         steps = xmalloc(cap + strlen(cfg) + strlen(mflags) + strlen(menv) + strlen(cenv) + 1024);
         steps[0] = 0;
         cmd = steps;
+        cmd += sprintf(cmd, "ln -sfn src \"$SRC/../%s\"\n", distname);
+        cmd += sprintf(cmd, "printf '#!/bin/sh\\nwhile case $1 in --*) :;; *) false;; esac; do shift; done\\nexec \"$@\"\\n' > \"$SRC/.mag-libtool\"\nchmod +x \"$SRC/.mag-libtool\"\n");
         if (wrksrc && strstr(wrksrc, "/") ) {
             char *rel = strstr(wrksrc, distname);
             if (rel && rel[strlen(distname)] == '/') cmd += sprintf(cmd, "cd %s\n", rel + strlen(distname) + 1);
         }
-        cmd += sprintf(cmd, "for p in \"$RECIPE_DIR\"/%s/patch-*; do [ -f \"$p\" ] || continue; patch -p0 < \"$p\"; done\n", pd);
-        if (cmake) cmd += sprintf(cmd, "mkdir -p mag-build && cd mag-build && %s cmake -G Ninja -DCMAKE_INSTALL_PREFIX=$PREFIX %s ..\nsamu\nDESTDIR=$DESTDIR samu install\n", cenv, cfg);
-        else {
-            if (hasconfig) cmd += sprintf(cmd, "%s ./configure --prefix=$PREFIX %s\n", cenv, cfg);
-            cmd += sprintf(cmd, "%s %s -j$JOBS %s %s\n", menv, make, mflags, btarget);
-            cmd += sprintf(cmd, "%s %s DESTDIR=$DESTDIR %s %s\n", menv, make, mflags, itarget);
+        char *hook[16] = { 0 };
+        static const char *const hn[] = { "do-extract", "post-extract", "pre-configure", "do-configure", "post-configure", "pre-build", "do-build", "post-build", "pre-install", "do-install", "post-install", NULL };
+        int hi, own_extract = var_get(&vs, "TARGET.do-extract") != NULL;
+        for (hi = 0; hn[hi]; hi++) {
+            char *key = fmt("TARGET.%s", hn[hi]);
+            if (var_get(&vs, key)) hook[hi] = expand(&vs, var_get(&vs, key), 0);
+            free(key);
         }
-        r->steps = r->url ? steps : xstrdup("true\n");
+        if (hook[0]) {
+            cmd += sprintf(cmd, "%s\n", hook[0]);
+            if (wrksrc && !strncmp(wrksrc, "$SRC/../", 8)) cmd += sprintf(cmd, "cd %s\n", wrksrc);
+        }
+        if (hook[1]) cmd += sprintf(cmd, "%s\n", hook[1]);
+        cmd += sprintf(cmd, "for p in \"$RECIPE_DIR\"/%s/patch-*; do [ -f \"$p\" ] || continue; patch -p0 < \"$p\"; done\n", pd);
+        if (hook[2]) cmd += sprintf(cmd, "%s\n", hook[2]);
+        if (hook[3]) cmd += sprintf(cmd, "%s\n", hook[3]);
+        else if (hasconfig && !cmake) cmd += sprintf(cmd, "%s ./configure --prefix=$PREFIX %s\n", cenv, cfg);
+        if (hook[4]) cmd += sprintf(cmd, "%s\n", hook[4]);
+        if (cmake && !hook[3]) cmd += sprintf(cmd, "mkdir -p mag-build && cd mag-build && %s cmake -G Ninja -DCMAKE_INSTALL_PREFIX=$PREFIX %s ..\nsamu\n", cenv, cfg);
+        else {
+            if (hook[5]) cmd += sprintf(cmd, "%s\n", hook[5]);
+            if (hook[6]) cmd += sprintf(cmd, "%s\n", hook[6]);
+            else cmd += sprintf(cmd, "%s %s -j$JOBS %s %s\n", menv, make, mflags, btarget);
+            if (hook[7]) cmd += sprintf(cmd, "%s\n", hook[7]);
+        }
+        {
+            char *dirs = var_get(&vs, "INSTALLATION_DIRS") ? expand(&vs, var_get(&vs, "INSTALLATION_DIRS"), 0) : NULL;
+            char *dsave, *dw;
+            if (dirs) for (dw = strtok_r(dirs, " \t", &dsave); dw; dw = strtok_r(NULL, " \t", &dsave)) cmd += sprintf(cmd, "mkdir -p $DESTDIR$PREFIX/%s\n", dw);
+            free(dirs);
+        }
+        if (hook[8]) cmd += sprintf(cmd, "%s\n", hook[8]);
+        if (hook[9]) cmd += sprintf(cmd, "%s\n", hook[9]);
+        else if (cmake) cmd += sprintf(cmd, "DESTDIR=$DESTDIR samu install\n");
+        else cmd += sprintf(cmd, "%s %s DESTDIR=$DESTDIR %s %s\n", menv, make, mflags, itarget);
+        if (hook[10]) cmd += sprintf(cmd, "%s\n", hook[10]);
+        for (hi = 0; hn[hi]; hi++) free(hook[hi]);
+        r->steps = r->url || own_extract ? steps : xstrdup("true\n");
         free(cfg); free(mflags); free(menv); free(cenv); free(btarget); free(itarget); free(wrksrc); free(pd);
     }
     free(dtext); free(distname); free(pkgname); free(sufx); free(distfiles); free(dfile); free(sites);
@@ -1063,20 +1131,20 @@ static int fetch(const struct recipe *r)
             av[0] = "/bin/sh"; av[1] = "-c"; av[2] = "set -f; $0 \"$1\" \"$2\""; av[3] = (char *)(cmd ? cmd : "curl -fsSL -o");
             av[4] = tmp; av[5] = (char *)url; av[6] = NULL;
             if (run(av, NULL)) { unlink(tmp); continue; }
-            rename(tmp, file);
-            got = 1;
+            sum = dist_sum(r, tmp);
+            if (sum && !strcmp(sum, want)) { rename(tmp, file); got = 1; }
+            else {
+                say("%s: wrong %s from %s", r->id, r->sha512 ? "sha512" : "sha256", url);
+                say("  recipe: %s", want);
+                say("  file:   %s", sum ? sum : "unreadable");
+                unlink(tmp);
+            }
+            free(sum);
+            sum = NULL;
         }
         if (!got) die("could not fetch %s", r->url);
     }
-    sum = dist_sum(r, file);
-    if (!sum || strcmp(sum, want)) {
-        say("%s: wrong %s", r->id, r->sha512 ? "sha512" : "sha256");
-        say("  recipe: %s", want);
-        say("  file:   %s", sum ? sum : "unreadable");
-        unlink(file);
-        exit(1);
-    }
-    free(sum); free(tmp); free(file);
+    free(tmp); free(file);
     return 0;
 }
 
