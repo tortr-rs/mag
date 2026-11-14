@@ -29,6 +29,10 @@ are put in place with a rename so a running program is never half written, and a
 already there is left alone (a changed one comes as `.new`). Every package keeps its file list in
 `var/lib/mag`, so `remove`, `files`, `owns` and `autoremove` need nothing else.
 
-`MAG_ROOT` installs somewhere else than /, `MAG_REPO` is a list of repos split by colons, `MAG_FETCH` is the
+`MAG_ROOT` installs somewhere else than /, `MAG_REPO` is a list of repos split by colons (default
+`/usr/share/mag/repo:/usr/pkgsrc`), `MAG_FETCH` is the
 download command (it needs https, which mag doesn't do itself: curl by default). tar and rm come from the
 system, which here means rifle and a tar.
+
+`mag sync` downloads the pkgsrc tree (`MAG_SYNC_URL`, NetBSD's `pkgsrc.tar.xz` if unset) with the same download command and
+unpacks it into `/usr/pkgsrc`, or `$MAG_ROOT/usr/pkgsrc`. `CONFIGURE_ARGS.name` in `/etc/mag.conf` adds configure arguments to one pkgsrc package.

@@ -616,7 +616,7 @@ static void compute_options(struct vars *vs)
     free(out);
 }
 
-/* /etc/mag.conf in the root: pkgsrc's mk.conf, plain VAR=value lines. JOBS, CFLAGS and the like for every build, PKG_DEFAULT_OPTIONS and PKG_OPTIONS.name for the pkgsrc packages */
+/* /etc/mag.conf in the root: pkgsrc's mk.conf, plain VAR=value lines. JOBS, CFLAGS and the like for every build, PKG_DEFAULT_OPTIONS and PKG_OPTIONS.name and CONFIGURE_ARGS.name (extra configure arguments) for the pkgsrc packages */
 static struct vars conf;
 static void read_makefile(struct vars *vs, const char *file, const char *pkgdir, const char *repo, struct list *bl, int depth);
 static void load_conf(void)
@@ -976,6 +976,9 @@ static struct recipe *parse_pkgsrc(const char *id, const char *dir, const char *
     {
         const char *prefix_args = "";
         char *cfg = var_get(&vs, "CONFIGURE_ARGS") ? expand(&vs, var_get(&vs, "CONFIGURE_ARGS"), 0) : xstrdup("");
+        char *ckey = fmt("CONFIGURE_ARGS.%s", strrchr(id, '/') ? strrchr(id, '/') + 1 : id);
+        if (conf_get(ckey)) cfg = fmt("%s %s", cfg, conf_get(ckey));
+        free(ckey);
         char *mflags = fmt("%s%s%s %s", var_get(&vs, "USE_BSD_MAKEFILE") ? "BINDIR=$PREFIX/bin MANDIR=$PREFIX/man LIBDIR=$PREFIX/lib BINOWN=$(id -un) BINGRP=$(id -gn) MANOWN=$(id -un) MANGRP=$(id -gn) LIBOWN=$(id -un) LIBGRP=$(id -gn) " : "", var_get(&vs, "USE_LIBTOOL") ? "LIBTOOL=libtool " : "", var_get(&vs, "MAKE_FLAGS") ? expand(&vs, var_get(&vs, "MAKE_FLAGS"), 0) : "", var_get(&vs, "BUILD_MAKE_FLAGS") ? expand(&vs, var_get(&vs, "BUILD_MAKE_FLAGS"), 0) : "");
         char *menv = var_get(&vs, "MAKE_ENV") ? expand(&vs, var_get(&vs, "MAKE_ENV"), 0) : xstrdup("");
         char *cenv = var_get(&vs, "CONFIGURE_ENV") ? expand(&vs, var_get(&vs, "CONFIGURE_ENV"), 0) : xstrdup("");
@@ -1019,7 +1022,7 @@ static struct recipe *parse_pkgsrc(const char *id, const char *dir, const char *
         if (hook[3]) cmd += sprintf(cmd, "%s\n", hook[3]);
         else if (hasconfig && !cmake) {
             const char *scr = var_get(&vs, "CONFIGURE_SCRIPT") ? var_get(&vs, "CONFIGURE_SCRIPT") : "./configure";
-            if (gnu || !var_get(&vs, "CONFIGURE_SCRIPT")) cmd += sprintf(cmd, "%s %s --prefix=$PREFIX --mandir=$PREFIX/man --sysconfdir=/etc --localstatedir=/var %s\n", cenv, scr, cfg);
+            if (gnu || !var_get(&vs, "CONFIGURE_SCRIPT")) cmd += sprintf(cmd, "%s %s %s %s --sysconfdir=/etc --localstatedir=/var %s\n", cenv, scr, strstr(cfg, "--prefix=") ? "" : "--prefix=$PREFIX", strstr(cfg, "--mandir=") ? "" : "--mandir=$PREFIX/man", cfg);
             else cmd += sprintf(cmd, "%s %s %s\n", cenv, scr, cfg);
         }
         if (hook[4]) cmd += sprintf(cmd, "%s\n", hook[4]);
@@ -1739,6 +1742,31 @@ static int cmd_hash(int n, char **files)
     return bad;
 }
 
+static int cmd_sync(void)
+{
+    const char *url = getenv("MAG_SYNC_URL"), *cmd = getenv("MAG_FETCH");
+    char *file = fmt("%s/var/cache/mag/pkgsrc.tar.xz", root), *part = fmt("%s.part", file), *tmp = fmt("%s/usr/pkgsrc.sync", root), *tree = fmt("%s/usr/pkgsrc", root), *from = fmt("%s/pkgsrc", tmp);
+    char *dl[] = { "/bin/sh", "-c", "set -f; $0 \"$1\" \"$2\"", (char *)(cmd ? cmd : "curl -fsSL -o"), part, (char *)(url ? url : "https://cdn.netbsd.org/pub/pkgsrc/current/pkgsrc.tar.xz"), NULL };
+    char *un[] = { "tar", "-xf", file, "-C", tmp, NULL };
+    char *rm[] = { "rm", "-rf", tree, NULL };
+    char *dir = xstrdup(file);
+    *strrchr(dir, '/') = 0;
+    if (mkpath(dir, 0755) < 0) die("cannot make %s: %s", dir, strerror(errno));
+    printf("==> fetching %s\n", dl[5]);
+    if (run(dl, NULL)) { unlink(part); die("could not fetch %s", dl[5]); }
+    if (rename(part, file)) die("cannot write %s: %s", file, strerror(errno));
+    rmtree(tmp);
+    if (mkpath(tmp, 0755) < 0) die("cannot make %s: %s", tmp, strerror(errno));
+    printf("==> unpacking into %s\n", tree);
+    if (run(un, NULL)) { rmtree(tmp); die("could not unpack %s", file); }
+    run(rm, NULL);
+    if (rename(from, tree)) { rmtree(tmp); die("cannot move the tree to %s: %s", tree, strerror(errno)); }
+    rmdir(tmp);
+    unlink(file);
+    free(dir);
+    return 0;
+}
+
 static int cmd_fetch(int n, char **names)
 {
     int i;
@@ -1837,14 +1865,15 @@ static void usage(void)
          "  deps PKG          its dependencies, rdeps PKG for what needs it\n"
          "  fetch PKG...      only download and check the sources\n"
          "  build PKG         build into a stage directory, install nothing\n"
+         "  sync              download the pkgsrc tree to /usr/pkgsrc\n"
          "  hash FILE...      sha256 of files, for writing recipes\n"
          "\n"
          "  -n  only say what would happen    -f  go on when files clash or something needs the package\n"
          "  -k  keep the build directory\n"
          "\n"
          "MAG_ROOT installs somewhere else than /, MAG_REPO is a list of repos split by colons (default\n"
-         "/usr/share/mag/repo), MAG_FETCH is the download command, which gets a file and an url (default\n"
-         "curl -fsSL -o), MAG_PREFIX is $PREFIX for the steps, /usr, and MAG_JOBS is $JOBS, 4");
+         "/usr/share/mag/repo:/usr/pkgsrc), MAG_SYNC_URL is where sync gets the tree,\n"
+         "MAG_FETCH is the download command, which gets a file and an url (default curl -fsSL -o), MAG_PREFIX is $PREFIX for the steps, /usr, and MAG_JOBS is $JOBS, 4");
 }
 
 int main(int argc, char **argv)
@@ -1854,7 +1883,7 @@ int main(int argc, char **argv)
     int i = 1, rc;
     root = "";
     if (r && strcmp(r, "/")) { rr = xstrdup(r); s = rr + strlen(rr); while (s > rr + 1 && s[-1] == '/') *--s = 0; root = rr; }
-    rp = rp && *rp ? rp : "/usr/share/mag/repo";
+    rp = rp && *rp ? rp : "/usr/share/mag/repo:/usr/pkgsrc";
     rr = xstrdup(rp);
     for (s = rr; s; ) {
         char *e = strchr(s, ':');
@@ -1892,6 +1921,7 @@ int main(int argc, char **argv)
         else if (!strcmp(cmd, "fetch") && n) rc = cmd_fetch(n, a);
         else if (!strcmp(cmd, "build") && n == 1) rc = cmd_build(a[0]);
         else if (!strcmp(cmd, "relocate") && n <= 1) rc = cmd_relocate(n ? a[0] : NULL);
+        else if (!strcmp(cmd, "sync") && !n) rc = cmd_sync();
         else if (!strcmp(cmd, "hash") && n) rc = cmd_hash(n, a);
         else { say("'%s' with %d argument%s makes no sense, mag help says what there is", cmd, n, n == 1 ? "" : "s"); return 1; }
     }

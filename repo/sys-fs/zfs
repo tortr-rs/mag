@@ -1,0 +1,10 @@
+desc: OpenZFS, zpool and zfs; the module comes with sys-kernel/zfs-module
+version: 2.4.4
+url: https://github.com/openzfs/zfs/releases/download/zfs-${version}/zfs-${version}.tar.gz
+sha256: 2a3c70d55a37cc71618a95a60e81ad66530201eb118d37741dc92efcf848c8b1
+deps: sys-apps/util-linux devel/libtirpc security/libressl devel/zlib devel/pkgconf devel/gmake
+steps:
+	./configure --prefix=$PREFIX --sysconfdir=/etc --localstatedir=/var --with-config=user --with-tirpc --with-udevdir=$PREFIX/lib/udev --enable-pyzfs=no --enable-pam=no --disable-sysvinit --disable-systemd --disable-static
+	gmake -j$JOBS
+	gmake DESTDIR=$DESTDIR install
+	rm -rf $DESTDIR$PREFIX/share/man $DESTDIR$PREFIX/lib/systemd $DESTDIR$PREFIX/share/zfs

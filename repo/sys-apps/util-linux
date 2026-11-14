@@ -1,9 +1,9 @@
-desc: mount, fdisk, lsblk, losetup and the other basics from the kernel people
+desc: mount, fdisk, cfdisk, lsblk, losetup and the other basics from the kernel people
 version: 2.42
 url: https://cdn.kernel.org/pub/linux/utils/util-linux/v2.42/util-linux-${version}.tar.xz
 sha256: 3452b260bbaa775d6e749ac3bb22111785003fc1f444970025c8da26dfa758e9
-deps: sys-kernel/linux-headers devel/gmake
+deps: sys-kernel/linux-headers devel/gmake devel/pkgconf dev-libs/netbsd-curses
 steps:
-	./configure --prefix=$PREFIX --disable-shared --disable-nls --disable-liblastlog2 --disable-nsenter --without-ncurses --without-tinfo --without-readline --without-python --without-systemd --without-udev --disable-makeinstall-chown --disable-makeinstall-setuid
+	./configure NCURSESW6_CONFIG=false NCURSESW5_CONFIG=false ac_cv_header_ncursesw_ncurses_h=no ac_cv_header_ncursesw_term_h=no --prefix=$PREFIX --disable-shared --with-pic --disable-nls --disable-liblastlog2 --disable-nsenter --with-ncursesw --without-tinfo --without-readline --without-python --without-systemd --without-udev --disable-makeinstall-chown --disable-makeinstall-setuid
 	gmake -j$JOBS
 	gmake DESTDIR=$DESTDIR install

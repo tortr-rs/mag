@@ -1,0 +1,13 @@
+desc: the ZFS kernel modules for the prebuilt kernel, 2.4.4
+version: 6.18.63
+url: https://dl-cdn.alpinelinux.org/alpine/v3.24/main/x86_64/zfs-lts-${version}-r0.apk
+sha256: bfb2737afdd286a920256568e0c9057b6c54e90ec8b954c8f3b0681a523e6ddf
+deps: sys-kernel/linux
+steps:
+	tar -xzf zfs-lts-*.apk 2>/dev/null || true
+	kv=$(ls lib/modules)
+	mkdir -p $DESTDIR/lib/modules/$kv/extra
+	for f in lib/modules/$kv/extra/*.ko.gz; do
+		gzip -dc $f > ${f%.gz}
+		llvm-strip --strip-debug -o $DESTDIR/lib/modules/$kv/extra/$(basename ${f%.gz}) ${f%.gz}
+	done

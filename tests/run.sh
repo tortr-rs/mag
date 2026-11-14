@@ -211,5 +211,12 @@ printf 'PKG_DEFAULT_OPTIONS=-beta\nPKG_OPTIONS.opt=gamma -alpha\n' >"$T/root/etc
 check 'package option variable' "  options: gamma" "$($MAG info devel/opt | grep '^  options:')"
 rm "$T/root/etc/mag.conf"
 
+mkdir -p "$T/ps/pkgsrc/cat/pkg"; echo one >"$T/ps/pkgsrc/cat/pkg/Makefile"
+tar -C "$T/ps" -cf "$T/ps.tar" pkgsrc
+MAG_SYNC_URL=file://$T/ps.tar $MAG sync >/dev/null 2>&1; check 'sync' "one" "$(cat "$T/root/usr/pkgsrc/cat/pkg/Makefile")"
+echo two >"$T/ps/pkgsrc/cat/pkg/Makefile"
+tar -C "$T/ps" -cf "$T/ps.tar" pkgsrc
+MAG_SYNC_URL=file://$T/ps.tar $MAG sync >/dev/null 2>&1; check 'sync again' "two" "$(cat "$T/root/usr/pkgsrc/cat/pkg/Makefile")"
+
 echo "$pass passed, $fail failed"
 [ $fail = 0 ]
