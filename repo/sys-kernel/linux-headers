@@ -1,0 +1,9 @@
+desc: the Linux userspace headers (Alpine linux-headers, newer than the kernel and compatible with it)
+version: 7.0.0
+url: https://dl-cdn.alpinelinux.org/alpine/v3.24/main/x86_64/linux-headers-${version}-r1.apk
+sha256: c4535f3f0dc6fd4d80efa7ff2a7a72a2d3f8dae31e2587c0785cc3243889cdf2
+deps:
+steps:
+	tar -xzf linux-headers-*.apk 2>/dev/null || true
+	mkdir -p $DESTDIR$PREFIX
+	cp -R usr/include $DESTDIR$PREFIX/
