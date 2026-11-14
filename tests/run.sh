@@ -154,5 +154,33 @@ printf 'SHA512 (hello-2.1.tar) = %s\n' "0000" >"$T/repo/devel/hello/distinfo"
 rm -f "$T/root/var/cache/mag/hello-2.1.tar"
 $MAG remove hello >/dev/null 2>&1; $MAG install devel/hello >"$T/out" 2>&1; check 'pkgsrc wrong checksum' 1 $?
 
+# options and mag.conf
+mkdir -p "$T/repo/devel/opt" "$T/root/etc"
+cat >"$T/repo/devel/opt/Makefile" <<'R'
+DISTNAME=	opt-1.0
+MASTER_SITES=	file:///nonexistent/
+COMMENT=	a package with options
+.include "options.mk"
+.include "../../mk/bsd.pkg.mk"
+R
+cat >"$T/repo/devel/opt/options.mk" <<'R'
+PKG_OPTIONS_VAR=	PKG_OPTIONS.opt
+PKG_SUPPORTED_OPTIONS=	alpha beta gamma
+PKG_SUGGESTED_OPTIONS=	alpha beta
+.include "../../mk/bsd.options.mk"
+.if !empty(PKG_OPTIONS:Mbeta)
+DEPENDS+=	base>=1:../../devel/base
+.endif
+R
+echo 'SHA512 (opt-1.0.tar.gz) = 00' >"$T/repo/devel/opt/distinfo"
+check 'options suggested' "  options: alpha beta" "$($MAG info devel/opt | grep '^  options:')"
+check 'options give a dep' "devel/base" "$($MAG deps devel/opt)"
+printf 'PKG_DEFAULT_OPTIONS=-beta gamma\n' >"$T/root/etc/mag.conf"
+check 'mag.conf default options' "  options: alpha gamma" "$($MAG info devel/opt | grep '^  options:')"
+check 'options off, dep gone' "" "$($MAG deps devel/opt)"
+printf 'PKG_DEFAULT_OPTIONS=-beta\nPKG_OPTIONS.opt=gamma -alpha\n' >"$T/root/etc/mag.conf"
+check 'package option variable' "  options: gamma" "$($MAG info devel/opt | grep '^  options:')"
+rm "$T/root/etc/mag.conf"
+
 echo "$pass passed, $fail failed"
 [ $fail = 0 ]

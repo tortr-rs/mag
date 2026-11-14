@@ -2,7 +2,7 @@ desc: the OpenBSD fork of OpenSSL: TLS and crypto
 version: 4.4.1
 url: https://cdn.openbsd.org/pub/OpenBSD/LibreSSL/libressl-${version}.tar.gz
 sha256: 290cdf1b53c086255dc302f118b98602a444e9ae6d11e9bfdd8c9b1b60aa3a22
-deps: sys-libs/musl
+deps:
 steps:
 	./configure --prefix=$PREFIX --sysconfdir=/etc --disable-shared
 	make -j$JOBS

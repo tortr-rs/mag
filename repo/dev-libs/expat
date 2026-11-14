@@ -2,7 +2,7 @@ desc: stream-oriented XML parser
 version: 2.10.0
 url: https://github.com/libexpat/libexpat/releases/download/R_2_10_0/expat-${version}.tar.xz
 sha256: c624ba2998fc65df1163a49641ff3f9ab73138b11641d92c86bee0fb01b1bc7f
-deps: sys-libs/musl
+deps:
 steps:
 	./configure --prefix=$PREFIX --disable-shared --without-docbook
 	make -j$JOBS

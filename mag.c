@@ -254,7 +254,7 @@ static char *sha512_file(const char *path)
 /* ---- recipes ---- */
 
 struct recipe {
-    char *id, *file, *dir, *desc, *version, *url, *sha, *sha512, *steps, *cache;
+    char *id, *file, *dir, *desc, *version, *url, *sha, *sha512, *steps, *cache, *options;
     struct list deps, alts;
 };
 
@@ -341,6 +341,43 @@ static struct recipe *parse_recipe(const char *id, const char *file, const char 
  * the Makefile is parsed here, not run: assignments, ${VAR} with a few modifiers, .if with the usual tests, .include of
  * Makefile.common and of buildlink3.mk files (those are the dependencies). what is not understood is skipped,
  * and a package that needs the mk/ framework for more than that says so when it fails to build */
+
+/* PROVIDES in a repo: "pkgsrc/id our/id" per line, "-" drops the dependency, "needs pkgsrc/id our/id" adds one the Makefile leaves out. it is how a pkgsrc package gets our zlib and not a second one */
+static struct list prov_from, prov_to, need_for, need_dep;
+
+static void load_provides(const char *repo)
+{
+    char *f = fmt("%s/PROVIDES", repo), *text = slurp(f, NULL), *line, *next;
+    free(f);
+    if (!text) return;
+    for (line = text; line; line = next) {
+        char *sp;
+        next = strchr(line, '\n');
+        if (next) *next++ = 0;
+        line = trim(line);
+        if (!*line || *line == '#') continue;
+        if (!strncmp(line, "needs ", 6)) {
+            char *a = trim(line + 6), *b = strpbrk(a, " \t");
+            if (!b) continue;
+            *b = 0;
+            push(&need_for, xstrdup(a)); push(&need_dep, xstrdup(trim(b + 1)));
+            continue;
+        }
+        sp = strpbrk(line, " \t");
+        if (!sp) continue;
+        *sp = 0;
+        push(&prov_from, xstrdup(line)); push(&prov_to, xstrdup(trim(sp + 1)));
+    }
+    free(text);
+}
+
+static void dep_add(struct recipe *r, const char *id)
+{
+    int i;
+    for (i = 0; i < prov_from.n; i++) if (!strcmp(prov_from.v[i], id)) { id = prov_to.v[i]; break; }
+    if (!strcmp(id, "-") || !strncmp(id, "mk/", 3) || has(&r->deps, id)) return;
+    push(&r->deps, xstrdup(id));
+}
 
 struct vars { char **k, **v; int n, cap; };
 
@@ -519,6 +556,67 @@ static int cond_eval(const struct vars *vs, const char *c)
     }
 }
 
+/* PKG_OPTIONS, what bsd.options.mk works out in pkgsrc: the suggested options, then PKG_DEFAULT_OPTIONS, then the package's own variable, each word adding an option or, with a minus, taking it off */
+static void words_into(struct list *l, const char *text)
+{
+    char *c = xstrdup(text), *save, *w;
+    for (w = strtok_r(c, " \t", &save); w; w = strtok_r(NULL, " \t", &save)) push(l, xstrdup(w));
+    free(c);
+}
+static void opts_apply(struct list *sel, const struct list *sup, const char *text)
+{
+    struct list ws = { 0 };
+    int i, j;
+    words_into(&ws, text);
+    for (i = 0; i < ws.n; i++) {
+        const char *name = ws.v[i] + (ws.v[i][0] == '-');
+        if (!has(sup, name)) continue;
+        if (ws.v[i][0] == '-') { for (j = 0; j < sel->n; j++) if (!strcmp(sel->v[j], name)) { memmove(sel->v + j, sel->v + j + 1, (sel->n - j - 1) * sizeof *sel->v); sel->n--; break; } }
+        else if (!has(sel, name)) push(sel, xstrdup(name));
+    }
+}
+static void compute_options(struct vars *vs)
+{
+    struct list sup = { 0 }, sel = { 0 }, groups = { 0 };
+    const char *g;
+    char *e, *vname, *out;
+    int i, j, len = 0;
+    static const char *const gvars[] = { "PKG_OPTIONS_OPTIONAL_GROUPS", "PKG_OPTIONS_REQUIRED_GROUPS", "PKG_OPTIONS_NONEMPTY_SETS", "PKG_OPTIONS_ONEOF_SETS", NULL };
+    if ((g = var_get(vs, "PKG_SUPPORTED_OPTIONS"))) { e = expand(vs, g, 0); words_into(&sup, e); free(e); }
+    for (i = 0; gvars[i]; i++) if ((g = var_get(vs, gvars[i]))) { e = expand(vs, g, 0); words_into(&groups, e); free(e); }
+    for (i = 0; i < groups.n; i++) {
+        char *k = fmt("PKG_OPTIONS_GROUP.%s", groups.v[i]), *k2 = fmt("PKG_OPTIONS_SET.%s", groups.v[i]);
+        if ((g = var_get(vs, k))) { e = expand(vs, g, 0); words_into(&sup, e); free(e); }
+        if ((g = var_get(vs, k2))) { e = expand(vs, g, 0); words_into(&sup, e); free(e); }
+        free(k); free(k2);
+    }
+    if ((g = var_get(vs, "PKG_SUGGESTED_OPTIONS"))) { e = expand(vs, g, 0); opts_apply(&sel, &sup, e); free(e); }
+    if ((g = var_get(vs, "PKG_DEFAULT_OPTIONS"))) { e = expand(vs, g, 0); opts_apply(&sel, &sup, e); free(e); }
+    if ((g = var_get(vs, "PKG_OPTIONS_VAR"))) {
+        vname = expand(vs, g, 0);
+        if ((g = var_get(vs, vname))) { e = expand(vs, g, 0); opts_apply(&sel, &sup, e); free(e); }
+        free(vname);
+    }
+    for (j = 0; j < sel.n; j++) len += strlen(sel.v[j]) + 1;
+    out = xmalloc(len + 1);
+    out[0] = 0;
+    for (j = 0; j < sel.n; j++) { if (j) strcat(out, " "); strcat(out, sel.v[j]); }
+    var_set(vs, "PKG_OPTIONS", out);
+    free(out);
+}
+
+/* /etc/mag.conf in the root: pkgsrc's mk.conf, plain VAR=value lines. JOBS, CFLAGS and the like for every build, PKG_DEFAULT_OPTIONS and PKG_OPTIONS.name for the pkgsrc packages */
+static struct vars conf;
+static void read_makefile(struct vars *vs, const char *file, const char *pkgdir, const char *repo, struct list *bl, int depth);
+static void load_conf(void)
+{
+    char *f = fmt("%s/etc/mag.conf", root);
+    struct list bl = { 0 };
+    if (exists(f)) read_makefile(&conf, f, ".", ".", &bl, 0);
+    free(f);
+}
+static const char *conf_get(const char *k) { return var_get(&conf, k); }
+
 static void read_makefile(struct vars *vs, const char *file, const char *pkgdir, const char *repo, struct list *bl, int depth)
 {
     char *text = slurp(file, NULL), *line, *next;
@@ -573,12 +671,16 @@ static void read_makefile(struct vars *vs, const char *file, const char *pkgdir,
                     char *sl = strstr(d, "/buildlink3.mk");
                     *sl = 0;
                     if (!has(bl, d)) push(bl, d); else free(d);
+                } else if (strstr(inc, "mk/bsd.options.mk")) {
+                    compute_options(vs);
                 } else if (!strncmp(inc, "../../mk/", 9) || !strncmp(inc, "../mk/", 6)) {
-                    /* the framework: not read */
-                } else if (!strncmp(inc, "../../", 6) && strstr(inc, ".mk")) {
-                    /* another package's .mk file: not read */
+                    /* the framework is not read, but what it stands for can be a dependency: PROVIDES says which */
+                    if (strstr(inc, ".buildlink3.mk")) { char *d = xstrdup(inc + 6); if (!has(bl, d)) push(bl, d); else free(d); }
                 } else if (inc[0] != '/') {
-                    char *p = fmt("%s/%s", pkgdir, inc);
+                    char *here = xstrdup(file), *sl = strrchr(here, '/'), *p;
+                    if (sl) *sl = 0; else strcpy(here, ".");
+                    p = fmt("%s/%s", here, inc);
+                    free(here);
                     read_makefile(vs, p, pkgdir, repo, bl, depth + 1);
                     free(p);
                 }
@@ -651,6 +753,8 @@ static struct recipe *parse_pkgsrc(const char *id, const char *dir, const char *
     int i;
     var_set(&vs, "OPSYS", "Linux"); var_set(&vs, "MACHINE_ARCH", "x86_64"); var_set(&vs, "LOWER_OPSYS", "linux");
     var_set(&vs, "MACHINE_PLATFORM", "Linux-x86_64"); var_set(&vs, "PKGSRC_COMPILER", "clang"); var_set(&vs, "OPSYS_VERSION", "0");
+    { int ci; for (ci = 0; ci < conf.n; ci++) var_set(&vs, conf.k[ci], conf.v[ci]); }
+    var_set(&vs, ".CURDIR", dir); var_set(&vs, "PKGSRCDIR", repo);
     load_sites(&vs, repo);
     read_makefile(&vs, mf, dir, repo, &bl, 0);
     free(mf);
@@ -668,6 +772,7 @@ static struct recipe *parse_pkgsrc(const char *id, const char *dir, const char *
         var_set(&vs, "PKGBASE", dash ? (x = strndup(pkgname, dash - pkgname), x) : pkgname); var_set(&vs, "PKGVERSION", r->version);
         if (rev && *rev && strcmp(rev, "0")) { char *v2 = fmt("%snb%s", r->version, rev); free(r->version); r->version = v2; var_set(&vs, "PKGVERSION", v2); }
     }
+    if (var_get(&vs, "PKG_OPTIONS") && *var_get(&vs, "PKG_OPTIONS")) r->options = xstrdup(var_get(&vs, "PKG_OPTIONS"));
     r->desc = var_get(&vs, "COMMENT") ? expand(&vs, var_get(&vs, "COMMENT"), 0) : xstrdup("");
     sufx = expand(&vs, var_get(&vs, "EXTRACT_SUFX") ? var_get(&vs, "EXTRACT_SUFX") : ".tar.gz", 0);
     distfiles = var_get(&vs, "DISTFILES") ? expand(&vs, var_get(&vs, "DISTFILES"), 0) : fmt("%s%s", distname, sufx);
@@ -675,6 +780,7 @@ static struct recipe *parse_pkgsrc(const char *id, const char *dir, const char *
     dfile = xstrdup(distfiles);
     dfile[strcspn(dfile, " \t")] = 0;
     { char *c = strchr(dfile, ':'); if (c) *c = 0; }
+    if (var_get(&vs, "DISTINFO_FILE")) { char *e = expand(&vs, var_get(&vs, "DISTINFO_FILE"), 0); free(di); di = e[0] == '/' ? e : fmt("%s/%s", dir, e); if (di != e) free(e); }
     dtext = slurp(di, NULL);
     free(di);
     r->sha512 = distinfo_hash(dtext, "SHA512", dfile);
@@ -730,19 +836,20 @@ static struct recipe *parse_pkgsrc(const char *id, const char *dir, const char *
                 char *c = strstr(w, ":../../");
                 if (!c) continue;
                 x = xstrdup(c + 7);
-                if (has(&r->deps, x)) free(x); else push(&r->deps, x);
+                dep_add(r, x); free(x);
             }
             free(s);
         }
     }
-    for (i = 0; i < bl.n; i++) if (!has(&r->deps, bl.v[i])) push(&r->deps, bl.v[i]);
+    for (i = 0; i < bl.n; i++) dep_add(r, bl.v[i]);
+    for (i = 0; i < need_for.n; i++) if (!strcmp(need_for.v[i], id)) dep_add(r, need_dep.v[i]);
     if ((g = var_get(&vs, "USE_TOOLS"))) {
         int j;
         s = expand(&vs, g, 0);
         for (w = strtok_r(s, " \t", &save); w; w = strtok_r(NULL, " \t", &save)) {
             char *c = strchr(w, ':');
             if (c) *c = 0;
-            for (j = 0; tool_pkgs[j][0]; j++) if (!strcmp(w, tool_pkgs[j][0]) && !has(&r->deps, (char *)tool_pkgs[j][1])) push(&r->deps, xstrdup(tool_pkgs[j][1]));
+            for (j = 0; tool_pkgs[j][0]; j++) if (!strcmp(w, tool_pkgs[j][0])) dep_add(r, tool_pkgs[j][1]);
         }
         free(s);
     }
@@ -758,6 +865,7 @@ static struct recipe *parse_pkgsrc(const char *id, const char *dir, const char *
         char *wrksrc = var_get(&vs, "WRKSRC") ? expand(&vs, var_get(&vs, "WRKSRC"), 0) : NULL;
         int gnu = var_get(&vs, "GNU_CONFIGURE") != NULL, cmake = var_get(&vs, "USE_CMAKE") != NULL, hasconfig = gnu || var_get(&vs, "HAS_CONFIGURE") != NULL;
         const char *make = "make";
+        char *pd = var_get(&vs, "PATCHDIR") ? expand(&vs, var_get(&vs, "PATCHDIR"), 0) : xstrdup("patches");
         size_t cap = 4096;
         (void)prefix_args;
         if ((g = var_get(&vs, "USE_TOOLS")) && strstr(g, "gmake")) make = "gmake";
@@ -768,15 +876,15 @@ static struct recipe *parse_pkgsrc(const char *id, const char *dir, const char *
             char *rel = strstr(wrksrc, distname);
             if (rel && rel[strlen(distname)] == '/') cmd += sprintf(cmd, "cd %s\n", rel + strlen(distname) + 1);
         }
-        cmd += sprintf(cmd, "for p in \"$RECIPE_DIR\"/patches/patch-*; do [ -f \"$p\" ] || continue; patch -p0 < \"$p\"; done\n");
+        cmd += sprintf(cmd, "for p in \"$RECIPE_DIR\"/%s/patch-*; do [ -f \"$p\" ] || continue; patch -p0 < \"$p\"; done\n", pd);
         if (cmake) cmd += sprintf(cmd, "mkdir -p mag-build && cd mag-build && %s cmake -G Ninja -DCMAKE_INSTALL_PREFIX=$PREFIX %s ..\nsamu\nDESTDIR=$DESTDIR samu install\n", cenv, cfg);
         else {
             if (hasconfig) cmd += sprintf(cmd, "%s ./configure --prefix=$PREFIX %s\n", cenv, cfg);
             cmd += sprintf(cmd, "%s %s -j$JOBS %s %s\n", menv, make, mflags, btarget);
             cmd += sprintf(cmd, "%s %s DESTDIR=$DESTDIR %s %s\n", menv, make, mflags, itarget);
         }
-        r->steps = steps;
-        free(cfg); free(mflags); free(menv); free(cenv); free(btarget); free(itarget); free(wrksrc);
+        r->steps = r->url ? steps : xstrdup("true\n");
+        free(cfg); free(mflags); free(menv); free(cenv); free(btarget); free(itarget); free(wrksrc); free(pd);
     }
     free(dtext); free(distname); free(pkgname); free(sufx); free(distfiles); free(dfile); free(sites);
     (void)repo;
@@ -1020,7 +1128,23 @@ static char *build(const struct recipe *r)
     setenv("VERSION", r->version, 1);
     setenv("RECIPE_DIR", r->dir, 1);
     setenv("PREFIX", prefix ? prefix : "/usr", 1);
+    if (*root) {
+        /* a root that is not / holds the dependencies: the compiler, the linker and the shell have to look there too */
+        const char *pa = getenv("PATH"), *cp = getenv("CPPFLAGS"), *lf = getenv("LDFLAGS");
+        char *v;
+        v = fmt("%s/usr/bin:%s/bin:%s", root, root, pa ? pa : "/usr/bin:/bin"); setenv("PATH", v, 1); free(v);
+        v = fmt("-I%s/usr/include %s", root, cp ? cp : ""); setenv("CPPFLAGS", v, 1); free(v);
+        v = fmt("-L%s/usr/lib %s", root, lf ? lf : ""); setenv("LDFLAGS", v, 1); free(v);
+        v = fmt("-I%s/usr/include %s", root, getenv("CFLAGS") ? getenv("CFLAGS") : "-O2"); setenv("CFLAGS", v, 1); free(v);
+        v = fmt("%s/usr/lib/pkgconfig:%s/usr/share/pkgconfig", root, root); setenv("PKG_CONFIG_PATH", v, 1); free(v);
+    }
+    if (!jobs) jobs = conf_get("JOBS") ? conf_get("JOBS") : conf_get("MAKE_JOBS");
     setenv("JOBS", jobs ? jobs : "4", 1);
+    {
+        static const char *const fl[] = { "CFLAGS", "CXXFLAGS", "CPPFLAGS", "LDFLAGS", NULL };
+        int fi;
+        for (fi = 0; fl[fi]; fi++) if (conf_get(fl[fi]) && !getenv(fl[fi])) setenv(fl[fi], conf_get(fl[fi]), 1);
+    }
     printf("==> building %s %s\n", r->id, r->version);
     av[0] = (char *)(sh ? sh : "/bin/sh"); av[1] = "-ec"; av[2] = r->steps; av[3] = NULL;
     if (run(av, src)) die("%s: the steps failed, left in %s", r->id, work);
@@ -1337,6 +1461,7 @@ static int cmd_info(const char *name)
     printf("%s %s\n", r->id, r->version);
     if (*r->desc) printf("  %s\n", r->desc);
     if (r->url) printf("  source: %s\n", r->url);
+    if (r->options) printf("  options: %s\n", r->options);
     if (r->deps.n) { printf("  deps:"); for (i = 0; i < r->deps.n; i++) printf(" %s", r->deps.v[i]); putchar('\n'); }
     printf("  recipe: %s\n", r->file);
     if (v) printf("  installed: %s\n", v); else puts("  not installed");
@@ -1491,9 +1616,10 @@ int main(int argc, char **argv)
     for (s = rr; s; ) {
         char *e = strchr(s, ':');
         if (e) *e++ = 0;
-        if (*s) { repos = xrealloc(repos, (nrepos + 1) * sizeof *repos); repos[nrepos++] = s; }
+        if (*s) { repos = xrealloc(repos, (nrepos + 1) * sizeof *repos); repos[nrepos++] = s; load_provides(s); }
         s = e;
     }
+    load_conf();
     for (; i < argc && argv[i][0] == '-' && argv[i][1]; i++) {
         const char *o;
         if (!strcmp(argv[i], "--")) { i++; break; }

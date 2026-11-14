@@ -2,7 +2,7 @@ desc: DHCP and IPv6 router solicitation client
 version: 10.5.2
 url: https://github.com/NetworkConfiguration/dhcpcd/releases/download/v${version}/dhcpcd-${version}.tar.xz
 sha256: 3e476657fdb6eeb38b277da3a48d0ac0113ecce5858ebdcddff2b629faed52b4
-deps: sys-libs/musl
+deps:
 steps:
 	./configure --prefix=$PREFIX --sysconfdir=/etc --dbdir=/var/lib/dhcpcd --runstatedir=/run --libexecdir=$PREFIX/lib/dhcpcd
 	make -j$JOBS

@@ -1,0 +1,39 @@
+# pkgsrc package -> the one of this repo that stands for it. a "-" means nothing is needed
+devel/zlib sys-libs/zlib
+devel/gmake dev-build/gmake
+devel/pkgconf dev-build/pkgconf
+devel/pcre2 dev-libs/pcre2
+security/openssl dev-libs/libressl
+security/libressl dev-libs/libressl
+www/curl net-misc/curl
+lang/perl5 dev-lang/perl
+textproc/expat dev-libs/expat
+devel/libffi dev-libs/libffi
+devel/libevent dev-libs/libevent
+archivers/xz app-arch/xz
+archivers/zstd app-arch/zstd
+archivers/lz4 app-arch/lz4
+archivers/bzip2 app-arch/bzip2
+archivers/libarchive app-arch/libarchive
+devel/bison dev-build/bison
+devel/m4 dev-build/m4
+devel/flex dev-build/flex
+devel/byacc dev-build/byacc
+devel/cmake dev-build/cmake
+devel/samurai dev-build/samurai
+math/bc dev-build/bc
+shells/dash app-shells/dash
+shells/oksh app-shells/oksh
+sysutils/file sys-apps/file
+net/dhcpcd net-misc/dhcpcd
+converters/libiconv -
+devel/gettext-lib -
+devel/gettext-tools -
+pkgtools/bootstrap-mk-files -
+pkgtools/digest -
+mk/curses.buildlink3.mk dev-libs/netbsd-curses
+mk/termcap.buildlink3.mk dev-libs/netbsd-curses
+mk/readline.buildlink3.mk -
+mk/editline.buildlink3.mk -
+needs shells/oksh dev-libs/netbsd-curses
+needs editors/vim dev-libs/netbsd-curses
