@@ -859,6 +859,11 @@ static struct recipe *parse_pkgsrc(const char *id, const char *dir, const char *
         for (k = 0; sh[k][0]; k++) var_set(&vs, sh[k][0], sh[k][1]);
     }
     load_sites(&vs, repo);
+    {
+        char *sk = fmt("PKG_SYSCONFDIR.%s", strrchr(id, '/') ? strrchr(id, '/') + 1 : id);
+        if (conf_get(sk)) var_set(&vs, "PKG_SYSCONFDIR", conf_get(sk));
+        free(sk);
+    }
     read_makefile(&vs, mf, dir, repo, &bl, 0);
     free(mf);
     if (!(g = var_get(&vs, "DISTNAME")) && !var_get(&vs, "PKGNAME")) { free(di); return NULL; }
