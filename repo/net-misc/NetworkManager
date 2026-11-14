@@ -2,7 +2,7 @@ desc: network connection manager and nmcli
 version: 1.58.1
 url: https://gitlab.freedesktop.org/NetworkManager/NetworkManager/-/releases/${version}/downloads/NetworkManager-${version}.tar.xz
 sha256: 262864cfd198123d3e5dbe91937441b97ee9059d6d712e1a5bfbb1c54668d14d
-deps: devel/meson devel/ninja-build devel/pkgconf devel/glib2 sysutils/dbus net-libs/libndp sys-apps/eudev sys-apps/util-linux net/wpa_supplicant
+deps: sys-kernel/linux-headers devel/meson devel/ninja-build devel/pkgconf devel/glib2 sysutils/dbus net-libs/libndp sys-apps/eudev sys-apps/util-linux net/wpa_supplicant
 steps:
 	sed -i "s/find_program('perl')/find_program('perl', required: false)/" meson.build
 	sed -i "/^docbooks = \[/,/^\]/c docbooks = []" src/libnm-core-public/meson.build
