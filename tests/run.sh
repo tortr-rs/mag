@@ -128,6 +128,19 @@ steps:
 	chmod 755 \$DESTDIR\$PREFIX/bin/bmake
 R
 
+sum=$(mktar nbpatch 1.0 "nbpatch 1.0")
+cat >"$T/repo/devel/nbpatch" <<R
+desc: nbpatch stand-in
+version: 1.0
+url: file://$T/src/nbpatch-\${version}.tar
+sha256: $sum
+deps:
+steps:
+	mkdir -p \$DESTDIR\$PREFIX/bin
+	printf '#!/bin/sh\nexec patch "\$@"\n' >\$DESTDIR\$PREFIX/bin/nbpatch
+	chmod 755 \$DESTDIR\$PREFIX/bin/nbpatch
+R
+
 # pkgsrc packages: a Makefile and a distinfo, read in place
 mkdir -p "$T/repo/mk/fetch" "$T/repo/devel/hello" "$T/repo/devel/hello/patches" "$T/repo/devel/base" "$T/src/hello-2.1"
 printf 'MASTER_SITE_LOCAL+=\tfile://%s/src/\n' "$T" >"$T/repo/mk/fetch/sites.mk"
@@ -159,7 +172,7 @@ printf '%s\n' '$NetBSD$' '' '--- hello.txt.orig' '+++ hello.txt' '@@ -1 +1 @@' '
 check 'pkgsrc info' "devel/hello 2.1
   a pkgsrc test package
   source: file://$T/src/hello-2.1.tar
-  deps: devel/base devel/bmake
+  deps: devel/base devel/nbpatch devel/bmake
   recipe: $T/repo/devel/hello/Makefile
   not installed" "$($MAG info devel/hello)"
 $MAG install devel/hello >"$T/out" 2>&1; check 'pkgsrc install' 0 $?

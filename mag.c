@@ -792,7 +792,7 @@ static struct recipe *parse_pkgsrc(const char *id, const char *dir, const char *
             { "CHMOD", "chmod" }, { "TRUE", "true" }, { "CAT", "cat" }, { "TEST", "test" }, { "TOUCH", "touch" }, { "MAKE", "make" },
             { "INSTALL_PROGRAM", "install -m 755" }, { "INSTALL_LIB", "install -m 755" }, { "INSTALL_LIB_DIR", "install -d -m 755" }, { "INSTALL_GAME", "install -m 755" }, { "INSTALL_GAME_DATA", "install -m 644" }, { "INSTALL_SCRIPT", "install -m 755" }, { "INSTALL_DATA", "install -m 644" },
             { "INSTALL_MAN", "install -m 644" }, { "INSTALL_PROGRAM_DIR", "install -d -m 755" }, { "INSTALL_DATA_DIR", "install -d -m 755" },
-            { "INSTALL_SCRIPT_DIR", "install -d -m 755" }, { "INSTALL_MAN_DIR", "install -d -m 755" }, { "CC", "cc" }, { "LIBTOOL", "libtool" }, { "PKG_SYSCONFDIR", "/etc" }, { "VARBASE", "/var" }, { "MACHINE_GNU_ARCH", "x86_64" }, { "MACHINE_GNU_PLATFORM", "x86_64-pc-linux-gnu" }, { "PKG_SHELL", "" }, { "REAL_ROOT_USER", "root" }, { "REAL_ROOT_GROUP", "root" }, { "RUN", "" }, { "RCD_SCRIPTS_DIR", "/etc/rc.d" }, { NULL, NULL }
+            { "INSTALL_SCRIPT_DIR", "install -d -m 755" }, { "INSTALL_MAN_DIR", "install -d -m 755" }, { "CC", "cc" }, { "LIBTOOL", "libtool" }, { "PKG_SYSCONFDIR", "/etc" }, { "VARBASE", "/var" }, { "MACHINE_GNU_ARCH", "x86_64" }, { "MACHINE_GNU_PLATFORM", "x86_64-pc-linux-gnu" }, { "PKG_SHELL", "" }, { "BINMODE", "755" }, { "NONBINMODE", "644" }, { "LIBMODE", "644" }, { "SHAREMODE", "644" }, { "MANMODE", "644" }, { "DIRMODE", "755" }, { "BINOWN", "root" }, { "BINGRP", "root" }, { "SHAREOWN", "root" }, { "SHAREGRP", "root" }, { "MANOWN", "root" }, { "MANGRP", "root" }, { "REAL_ROOT_USER", "root" }, { "REAL_ROOT_GROUP", "root" }, { "RUN", "" }, { "RCD_SCRIPTS_DIR", "/etc/rc.d" }, { NULL, NULL }
         };
         int k;
         for (k = 0; sh[k][0]; k++) var_set(&vs, sh[k][0], sh[k][1]);
@@ -904,6 +904,15 @@ static struct recipe *parse_pkgsrc(const char *id, const char *dir, const char *
         }
         free(s);
     }
+    {
+        char *pdir = fmt("%s/%s", dir, var_get(&vs, "PATCHDIR") ? var_get(&vs, "PATCHDIR") : "patches");
+        DIR *pd2 = opendir(pdir);
+        struct dirent *pe;
+        int has_patch = 0;
+        if (pd2) { while ((pe = readdir(pd2))) if (!strncmp(pe->d_name, "patch-", 6)) has_patch = 1; closedir(pd2); }
+        if (has_patch && strcmp(id, "devel/nbpatch") && strcmp(id, "pkgtools/libnbcompat") && strcmp(id, "devel/bmake") && strcmp(id, "pkgtools/bootstrap-mk-files")) dep_add(r, "devel/nbpatch");
+        free(pdir);
+    }
     /* the steps: patches, configure, build, install, each from the variables pkgsrc has for it */
     {
         const char *prefix_args = "";
@@ -945,7 +954,7 @@ static struct recipe *parse_pkgsrc(const char *id, const char *dir, const char *
             if (wrksrc && !strncmp(wrksrc, "$SRC/../", 8)) cmd += sprintf(cmd, "cd %s\n", wrksrc);
         }
         if (hook[1]) cmd += sprintf(cmd, "%s\n", hook[1]);
-        cmd += sprintf(cmd, "for p in \"$RECIPE_DIR\"/%s/patch-*; do [ -f \"$p\" ] || continue; patch -p0 < \"$p\"; done\n", pd);
+        cmd += sprintf(cmd, "P=patch; command -v nbpatch >/dev/null && P=nbpatch\nfor p in \"$RECIPE_DIR\"/%s/patch-*; do [ -f \"$p\" ] || continue; $P -p0 < \"$p\"; done\n", pd);
         if (hook[2]) cmd += sprintf(cmd, "%s\n", hook[2]);
         if (hook[3]) cmd += sprintf(cmd, "%s\n", hook[3]);
         else if (hasconfig && !cmake) cmd += sprintf(cmd, "%s ./configure --prefix=$PREFIX --mandir=$PREFIX/man --sysconfdir=/etc --localstatedir=/var %s\n", cenv, cfg);

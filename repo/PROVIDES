@@ -11,3 +11,4 @@ needs shells/oksh dev-libs/netbsd-curses
 needs editors/vim dev-libs/netbsd-curses
 lang/tcl -
 x11/tk -
+needs devel/nbpatch pkgtools/libnbcompat
