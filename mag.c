@@ -963,7 +963,7 @@ static struct recipe *parse_pkgsrc(const char *id, const char *dir, const char *
         else {
             if (hook[5]) cmd += sprintf(cmd, "%s\n", hook[5]);
             if (hook[6]) cmd += sprintf(cmd, "%s\n", hook[6]);
-            else if (!var_get(&vs, "NO_BUILD")) cmd += sprintf(cmd, "%s %s %s %s %s\n", menv, make, var_get(&vs, "MAKE_JOBS_SAFE") && !strcmp(var_get(&vs, "MAKE_JOBS_SAFE"), "no") ? "-j1" : "-j$JOBS", mflags, btarget);
+            else if (!var_get(&vs, "NO_BUILD")) cmd += sprintf(cmd, "%s%s %s %s %s %s\n", var_get(&vs, "USE_BSD_MAKEFILE") ? "env -u DESTDIR " : "", menv, make, var_get(&vs, "MAKE_JOBS_SAFE") && !strcmp(var_get(&vs, "MAKE_JOBS_SAFE"), "no") ? "-j1" : "-j$JOBS", mflags, btarget);
             if (hook[7]) cmd += sprintf(cmd, "%s\n", hook[7]);
         }
         {
