@@ -1,0 +1,12 @@
+desc: tar, cpio and cat for archives, from libarchive; what pkgsrc's own bsdtar builds with copies of zlib and bzip2 that mag does not bring along
+version: 3.8.11
+url: https://www.libarchive.org/downloads/libarchive-${version}.tar.xz
+sha256: a3dc0872b1b39da34dc18ef1b944f0f11ffd37425d70ae04be679279f1cf43d2
+deps: archivers/libarchive devel/zlib archivers/bzip2 archivers/xz archivers/zstd archivers/lz4 dev-build/libtool devel/gmake
+steps:
+	./configure --prefix=$PREFIX --disable-static --enable-bsdtar=shared --enable-bsdcpio=shared --enable-bsdcat=shared --disable-bsdunzip --without-openssl --without-xml2 --without-expat --without-nettle --without-iconv --without-lz4 --disable-acl --disable-xattr
+	gmake -j$JOBS LIBTOOL=libtool
+	gmake LIBTOOL=libtool DESTDIR=$DESTDIR install
+	ln -sf bsdtar $DESTDIR$PREFIX/bin/tar
+	ln -sf bsdcpio $DESTDIR$PREFIX/bin/cpio
+	rm -rf $DESTDIR$PREFIX/lib $DESTDIR$PREFIX/include $DESTDIR$PREFIX/share
