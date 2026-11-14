@@ -1,4 +1,4 @@
-desc: the Linux kernel and its modules, the Alpine linux-lts build (6.18 LTS)
+desc: the Linux kernel and its modules, prebuilt, 6.18 LTS
 version: 6.18.63
 url: https://dl-cdn.alpinelinux.org/alpine/v3.24/main/x86_64/linux-lts-${version}-r0.apk
 sha256: 6709cb3a85ce874efb85abd738f3232bfbc859a474f8b122e6ad1e3d5a25f99d
