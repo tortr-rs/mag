@@ -1056,7 +1056,7 @@ static struct recipe *parse_pkgsrc(const char *id, const char *dir, const char *
         if (hook[3]) cmd += sprintf(cmd, "%s\n", hook[3]);
         else if (hasconfig && !cmake && !meson) {
             const char *scr = var_get(&vs, "CONFIGURE_SCRIPT") ? var_get(&vs, "CONFIGURE_SCRIPT") : "./configure";
-            if (gnu || !var_get(&vs, "CONFIGURE_SCRIPT")) cmd += sprintf(cmd, "%s %s %s %s --sysconfdir=/etc --localstatedir=/var %s\n", cenv, scr, strstr(cfg, "--prefix=") ? "" : "--prefix=$PREFIX", strstr(cfg, "--mandir=") ? "" : "--mandir=$PREFIX/man", cfg);
+            if (gnu || (!var_get(&vs, "CONFIGURE_SCRIPT") && !strstr(cfg, "--prefix="))) cmd += sprintf(cmd, "%s %s %s %s --sysconfdir=/etc --localstatedir=/var %s\n", cenv, scr, strstr(cfg, "--prefix=") ? "" : "--prefix=$PREFIX", strstr(cfg, "--mandir=") ? "" : "--mandir=$PREFIX/man", cfg);
             else cmd += sprintf(cmd, "%s %s %s\n", cenv, scr, cfg);
         }
         if (hook[4]) cmd += sprintf(cmd, "%s\n", hook[4]);

@@ -49,7 +49,7 @@ pic_object='.libs/$n.o'
 non_pic_object='$n.o'
 LO
 		if [ $static = no ]; then
-			run $cc_cmd -c -fPIC -DPIC "$@" -o "$d/.libs/$n.o" || exit $?
+			run $cc_cmd -c "$@" -fPIC -DPIC -o "$d/.libs/$n.o" || exit $?
 		else
 			echo "pic_object=none" >> "$out"
 		fi
