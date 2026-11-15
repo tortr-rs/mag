@@ -27,3 +27,7 @@ needs devel/libtirpc sys-libs/bsd-queue
 devel/ninja-build devel/samurai
 textproc/xmlto -
 archivers/bsdtar app-arch/bsdtar
+devel/gperf -
+textproc/docbook-xml -
+textproc/docbook-xsl -
+textproc/libxslt -
