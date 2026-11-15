@@ -1064,7 +1064,7 @@ static struct recipe *parse_pkgsrc(const char *id, const char *dir, const char *
         }
         if (hook[4]) cmd += sprintf(cmd, "%s\n", hook[4]);
         if (meson && !hook[3]) cmd += sprintf(cmd, "%s meson setup --prefix=$PREFIX --libdir=lib --libexecdir=libexec --mandir=man --sysconfdir=/etc --buildtype=plain --wrap-mode=nodownload \"-Dc_args=$CFLAGS $CPPFLAGS -Wno-unused-command-line-argument\" \"-Dc_link_args=$LDFLAGS\" %s . mag-build\nsamu -C mag-build\n", cenv, cfg);
-        else if (cmake && !hook[3]) cmd += sprintf(cmd, "mkdir -p mag-build && cd mag-build && %s cmake -G Ninja -DCMAKE_INSTALL_PREFIX=$PREFIX %s ..\nsamu\n", cenv, cfg);
+        else if (cmake && !hook[3]) cmd += sprintf(cmd, "mkdir -p mag-build && cd mag-build && %s cmake -G Ninja -DCMAKE_INSTALL_PREFIX=$PREFIX -DCMAKE_INSTALL_LIBDIR=lib %s ..\nsamu\n", cenv, cfg);
         else {
             if (hook[5]) cmd += sprintf(cmd, "%s\n", hook[5]);
             if (hook[6]) cmd += sprintf(cmd, "%s\n", hook[6]);
