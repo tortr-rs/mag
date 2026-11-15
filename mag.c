@@ -477,7 +477,8 @@ static char *expand(const struct vars *vs, const char *s, int depth)
             while (name_end < p - 1 && *name_end != ':') name_end++;
             name = strndup(s + 2, name_end - (s + 2));
             got = var_get(vs, name);
-            val = got ? expand(vs, got, depth + 1) : xstrdup("");
+            if (name_end[0] == ':' && name_end[1] == 'L' && (name_end + 2 == p - 1 || name_end[2] == ':')) { val = expand(vs, name, depth + 1); name_end += 2; }
+            else val = got ? expand(vs, got, depth + 1) : xstrdup("");
             while (name_end < p - 1) {
                 const char *me = name_end + 1;
                 int dd = 0;
