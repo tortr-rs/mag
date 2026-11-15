@@ -1000,6 +1000,11 @@ static struct recipe *parse_pkgsrc(const char *id, const char *dir, const char *
         (void)prefix_args;
         if ((g = var_get(&vs, "USE_TOOLS")) && strstr(g, "gmake")) make = "gmake";
         else if (!var_get(&vs, "TARGET.do-build") && !var_get(&vs, "NO_BUILD") && strcmp(id, "devel/bmake")) dep_add(r, "devel/bmake");
+        {
+            char *mk = fmt("MAKE.%s", strrchr(id, '/') ? strrchr(id, '/') + 1 : id);
+            if (conf_get(mk)) make = conf_get(mk);
+            free(mk);
+        }
         var_set(&vs, "MAKE", make);
         if (var_get(&vs, "USE_LIBTOOL")) dep_add(r, "dev-build/libtool");
         { int ti; for (ti = 0; ti < vs.n; ti++) if (!strncmp(vs.k[ti], "TARGET.", 7)) cap += strlen(vs.v[ti]) * 4; }
