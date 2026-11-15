@@ -1076,6 +1076,7 @@ static struct recipe *parse_pkgsrc(const char *id, const char *dir, const char *
             if (dirs) for (dw = strtok_r(dirs, " \t", &dsave); dw; dw = strtok_r(NULL, " \t", &dsave)) cmd += sprintf(cmd, "mkdir -p $DESTDIR%s%s\n", dw[0] == '/' || dw[0] == '$' ? "" : "$PREFIX/", dw);
             free(dirs);
         }
+        if (var_get(&vs, "AUTO_MKDIRS")) cmd += sprintf(cmd, "mkdir -p $DESTDIR$PREFIX/bin $DESTDIR$PREFIX/sbin $DESTDIR$PREFIX/lib $DESTDIR$PREFIX/share $DESTDIR$PREFIX/man/man1 $DESTDIR$PREFIX/man/man5 $DESTDIR$PREFIX/man/man8\n");
         if (hook[8]) cmd += sprintf(cmd, "%s\n", hook[8]);
         if (hook[9]) cmd += sprintf(cmd, "%s\n", hook[9]);
         else if (cmake) cmd += sprintf(cmd, "DESTDIR=$DESTDIR samu install\n");
