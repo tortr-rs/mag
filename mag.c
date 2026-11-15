@@ -751,6 +751,7 @@ static void read_makefile(struct vars *vs, const char *file, const char *pkgdir,
                     if (strstr(inc, ".buildlink3.mk")) { char *d = xstrdup(inc + 6); if (!has(bl, d)) push(bl, d); else free(d); }
                 } else if (strstr(inc, "lang/python/pyversion.mk")) {
                 } else if (strstr(inc, "devel/meson/build.mk")) { var_set(vs, "MAG_MESON", "yes");
+                } else if (strstr(inc, "devel/cmake/build.mk")) { var_set(vs, "USE_CMAKE", "yes");
                 } else if (inc[0] != '/') {
                     char *here = xstrdup(file), *sl = strrchr(here, '/'), *p;
                     if (sl) *sl = 0; else strcpy(here, ".");
