@@ -1006,6 +1006,7 @@ static struct recipe *parse_pkgsrc(const char *id, const char *dir, const char *
             free(mk);
         }
         var_set(&vs, "MAKE", make);
+        if (var_get(&vs, "MAG_MESON")) dep_add(r, "devel/samurai");
         if (var_get(&vs, "USE_LIBTOOL")) dep_add(r, "dev-build/libtool");
         { int ti; for (ti = 0; ti < vs.n; ti++) if (!strncmp(vs.k[ti], "TARGET.", 7)) cap += strlen(vs.v[ti]) * 4; }
         steps = xmalloc(cap + strlen(cfg) + strlen(mflags) + strlen(menv) + strlen(cenv) + 1024);

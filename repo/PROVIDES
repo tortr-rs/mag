@@ -31,3 +31,5 @@ devel/gperf -
 textproc/docbook-xml -
 textproc/docbook-xsl -
 textproc/libxslt -
+needs x11/libX11 devel/xorg-util-macros
+needs x11/libXinerama devel/xorg-util-macros
