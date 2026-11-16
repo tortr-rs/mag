@@ -1,0 +1,9 @@
+desc: perl, from its own Configure: autoconf, automake and half of the build tools run on it
+version: 5.44.0
+url: https://www.cpan.org/src/5.0/perl-${version}.tar.gz
+sha256: 3b855066b92491cb40e86affb1ca57d1a388aa43e51b91c7806a32c2f65f96c3
+deps:
+steps:
+	sh Configure -des -Dprefix=$PREFIX -Dcc=cc -Dman1dir=none -Dman3dir=none -Ui_db -Ui_gdbm -Ui_ndbm -Ui_dbm -Dusedl -Dd_eaccess=undef -Dprivlib=$PREFIX/lib/perl5/${version} -Darchlib=$PREFIX/lib/perl5/${version}/arch -Dsitelib=$PREFIX/lib/perl5/site_perl/${version} -Dsitearch=$PREFIX/lib/perl5/site_perl/${version}/arch
+	make -j$JOBS
+	make DESTDIR=$DESTDIR install

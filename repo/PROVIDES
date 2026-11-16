@@ -32,3 +32,4 @@ misc/pciids sys-apps/pciids
 textproc/py-docutils -
 lang/mawk lang/nawk
 lang/gawk lang/nawk
+lang/perl5 dev-lang/perl
