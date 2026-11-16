@@ -1333,6 +1333,74 @@ static void rmtree(const char *path)
 }
 
 /* builds the recipe, returns the stage directory its files were installed into */
+
+static char *path_find(const char *name)
+{
+    const char *pa = getenv("PATH");
+    char *copy = xstrdup(pa ? pa : "/usr/bin"), *tok, *sv, *found = NULL;
+    for (tok = strtok_r(copy, ":", &sv); tok && !found; tok = strtok_r(NULL, ":", &sv)) {
+        char *f = fmt("%s/%s", tok, name);
+        if (access(f, X_OK) == 0) found = f; else free(f);
+    }
+    free(copy);
+    return found;
+}
+
+/* the newest python3.N in PATH, for a build that asks for python3 or python */
+static char *newest_python(void)
+{
+    const char *pa = getenv("PATH");
+    char *copy = xstrdup(pa ? pa : "/usr/bin"), *tok, *sv, *best = NULL;
+    int bestn = -1;
+    for (tok = strtok_r(copy, ":", &sv); tok; tok = strtok_r(NULL, ":", &sv)) {
+        DIR *d = opendir(tok);
+        struct dirent *e;
+        if (!d) continue;
+        while ((e = readdir(d))) {
+            const char *n = e->d_name;
+            char *end;
+            long v;
+            if (strncmp(n, "python3.", 8) || !n[8]) continue;
+            v = strtol(n + 8, &end, 10);
+            if (*end || v <= bestn) continue;
+            free(best); best = fmt("%s/%s", tok, n); bestn = v;
+        }
+        closedir(d);
+    }
+    free(copy);
+    return best;
+}
+
+/* a build must not fail on a name that only differs by a version or a prefix: make it a link in the build's own tools directory */
+static void add_shims(const char *work)
+{
+    static const char *const alias[][4] = { { "awk", "nawk", "mawk", "gawk" }, { "make", "gmake", "bmake", NULL }, { "yacc", "byacc", "bison", NULL }, { "lex", "flex", NULL, NULL }, { "sh", "mksh", NULL, NULL }, { NULL } };
+    char *bin = fmt("%s/shims", work), *np;
+    int i, j, any = 0;
+    mkpath(bin, 0755);
+    for (i = 0; alias[i][0]; i++) {
+        char *have = path_find(alias[i][0]);
+        if (have) { free(have); continue; }
+        for (j = 1; j < 4 && alias[i][j]; j++) {
+            char *to = path_find(alias[i][j]);
+            if (to) { char *l = fmt("%s/%s", bin, alias[i][0]); unlink(l); symlink(to, l); free(l); free(to); any = 1; break; }
+        }
+    }
+    {
+        static const char *const py[] = { "python3", "python", NULL };
+        char *best = NULL;
+        for (i = 0; py[i]; i++) {
+            char *have = path_find(py[i]);
+            if (have) { free(have); continue; }
+            if (!best) best = newest_python();
+            if (best) { char *l = fmt("%s/%s", bin, py[i]); unlink(l); symlink(best, l); free(l); any = 1; }
+        }
+        free(best);
+    }
+    if (any) { np = fmt("%s:%s", getenv("PATH"), bin); setenv("PATH", np, 1); free(np); }
+    free(bin);
+}
+
 static char *build(const struct recipe *r)
 {
     char *work = workdir(r), *src, *stage, *file = NULL;
@@ -1393,6 +1461,7 @@ static char *build(const struct recipe *r)
         }
         free(crt); free(so);
     }
+    add_shims(work);
     if (!jobs) jobs = conf_get("JOBS") ? conf_get("JOBS") : conf_get("MAKE_JOBS");
     setenv("JOBS", jobs ? jobs : "4", 1);
     {
