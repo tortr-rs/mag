@@ -446,7 +446,7 @@ static char *apply_mod(const struct vars *vs, char *val, const char *mod, size_t
         *o = 0;
     } else if (!strcmp(m, "Q")) {
         const char *p;
-        for (p = copy; *p; p++) { if (strchr(" \t\n'\"\\$`&|;<>()*?[]#~!", *p)) *o++ = '\\'; *o++ = *p; }
+        for (p = copy; *p; p++) { if (strchr(" \t\n'\"\\$`&|;<>()*?[]#~!", *p) && !(*p == '$' && (isupper((unsigned char)p[1]) || p[1] == '{'))) *o++ = '\\'; *o++ = *p; }
         *o = 0;
     } else if (!strcmp(m, "tl") || !strcmp(m, "tu")) {
         int up = m[1] == 'u';
