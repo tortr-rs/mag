@@ -13,21 +13,15 @@ lang/tcl -
 x11/tk -
 needs devel/nbpatch pkgtools/libnbcompat
 security/openssl security/libressl
-lang/perl5 -
 devel/libuuid sys-apps/util-linux
 devel/libblkid sys-apps/util-linux
 devel/readline -
 databases/gdbm -
 databases/gdbm_compat -
-devel/autoconf -
-devel/automake -
-converters/help2man -
-devel/p5-gettext -
 needs devel/libtirpc sys-libs/bsd-queue
 devel/ninja-build devel/samurai
 textproc/xmlto -
 archivers/bsdtar app-arch/bsdtar
-devel/gperf -
 textproc/docbook-xml -
 textproc/docbook-xsl -
 textproc/libxslt -
