@@ -9,7 +9,7 @@ while [ $# -gt 0 ]; do
 	--mode=*) mode=${1#--mode=};;
 	--mode) shift; mode=$1;;
 	--tag=*|--quiet|--silent|--no-quiet|--no-silent|--debug|--dry-run|--preserve-dup-deps|--verbose|--finish) ;;
-	--version) echo "libtool (chamesle) 2.4.7"; exit 0;;
+	--version) echo "ltmain.sh (GNU libtool) 2.4.7"; exit 0;;
 	--features) echo "enable shared libraries"; echo "enable static libraries"; exit 0;;
 	--config) exit 0;;
 	*) break;;

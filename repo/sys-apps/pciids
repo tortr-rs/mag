@@ -1,0 +1,7 @@
+desc: the list of PCI vendor and device names
+version: 20261024
+url: https://github.com/pciutils/pciids/archive/fe7fceb2e1153d495e1deefacf59c5d61c36ef8e.tar.gz
+sha256: d6271713fe8674f2253f1b69a4b2e2b4fadb5b03e3dd5eaca16cc226b55729fc
+deps:
+steps:
+	install -Dm644 pci.ids $DESTDIR$PREFIX/share/pciids/pci.ids

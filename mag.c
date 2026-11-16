@@ -618,7 +618,7 @@ static void compute_options(struct vars *vs)
     free(out);
 }
 
-/* /etc/mag.conf in the root: pkgsrc's mk.conf, plain VAR=value lines. JOBS, CFLAGS and the like for every build, PKG_DEFAULT_OPTIONS and PKG_OPTIONS.name and CONFIGURE_ARGS.name (extra configure arguments) for the pkgsrc packages */
+/* /etc/mag.conf in the root: pkgsrc's mk.conf, plain VAR=value lines. JOBS, CFLAGS and the like for every build, PKG_DEFAULT_OPTIONS and PKG_OPTIONS.name and CONFIGURE_ARGS.name (extra configure arguments) and SERIAL.name=yes (build with -j1) for the pkgsrc packages */
 static struct vars conf;
 static void read_makefile(struct vars *vs, const char *file, const char *pkgdir, const char *repo, struct list *bl, int depth);
 static void load_conf(void)
@@ -853,7 +853,7 @@ static struct recipe *parse_pkgsrc(const char *id, const char *dir, const char *
             { "LOCALBASE", "$ROOT$PREFIX" }, { "SSLBASE", "$ROOT$PREFIX" }, { "PYTHON_VERSION", "312" }, { "PYPKGPREFIX", "py312" }, { "PYVERSSUFFIX", "3.12" }, { "PYTHONBIN", "python3.12" }, { "TOOL_PYTHONBIN", "python3.12" }, { "PYLIB", "lib/python3.12" }, { "PYSITELIB", "lib/python3.12/site-packages" }, { "BUILDLINK_PREFIX.openssl", "$ROOT$PREFIX" }, { "PKGMANDIR", "man" }, { "SETENV", "env" }, { "TOOLS_SHELL", "/bin/sh" }, { "SH", "/bin/sh" },
             { "CP", "cp" }, { "MV", "mv" }, { "RM", "rm" }, { "LN", "ln" }, { "MKDIR", "mkdir -p" }, { "ECHO", "echo" }, { "SED", "sed" },
             { "CHMOD", "chmod" }, { "TRUE", "true" }, { "CAT", "cat" }, { "TEST", "test" }, { "TOUCH", "touch" }, { "MAKE", "make" },
-            { "BSD_INSTALL_PROGRAM", "install -m 755" }, { "BSD_INSTALL_PROGRAM_DIR", "install -d -m 755" }, { "BSD_INSTALL_SCRIPT", "install -m 755" }, { "BSD_INSTALL_SCRIPT_DIR", "install -d -m 755" }, { "BSD_INSTALL_LIB", "install -m 755" }, { "BSD_INSTALL_LIB_DIR", "install -d -m 755" }, { "BSD_INSTALL_DATA", "install -m 644" }, { "BSD_INSTALL_DATA_DIR", "install -d -m 755" }, { "BSD_INSTALL_MAN", "install -m 644" }, { "BSD_INSTALL_MAN_DIR", "install -d -m 755" }, { "BSD_INSTALL_GAME", "install -m 755" }, { "BSD_INSTALL_GAME_DIR", "install -d -m 755" }, { "INSTALL", "install" }, { "FIND", "find" }, { "ECHO_MSG", "echo" }, { "STEP_MSG", "echo" }, { "WARNING_MSG", "echo" }, { "PHASE_MSG", "echo" }, { "ERROR_MSG", "echo" }, { "FAIL_MSG", "echo" }, { "INFO_MSG", "echo" }, { "XARGS", "xargs" }, { "AWK", "awk" }, { "GREP", "grep" }, { "EGREP", "grep -E" }, { "HEAD", "head" }, { "TAIL", "tail" }, { "TR", "tr" }, { "SORT", "sort" }, { "WC", "wc" }, { "CMP", "cmp" }, { "DIFF", "diff" }, { "BASENAME", "basename" }, { "DIRNAME", "dirname" }, { "PWD", "pwd" }, { "TOOLS_PLATFORM.pwd", "/bin/pwd" }, { "INSTALL_PROGRAM", "install -m 755" }, { "INSTALL_LIB", "install -m 755" }, { "INSTALL_LIB_DIR", "install -d -m 755" }, { "INSTALL_GAME", "install -m 755" }, { "INSTALL_GAME_DATA", "install -m 644" }, { "INSTALL_SCRIPT", "install -m 755" }, { "INSTALL_DATA", "install -m 644" },
+            { "BSD_INSTALL_PROGRAM", "install -m 755" }, { "BSD_INSTALL_PROGRAM_DIR", "install -d -m 755" }, { "BSD_INSTALL_SCRIPT", "install -m 755" }, { "BSD_INSTALL_SCRIPT_DIR", "install -d -m 755" }, { "BSD_INSTALL_LIB", "install -m 755" }, { "BSD_INSTALL_LIB_DIR", "install -d -m 755" }, { "BSD_INSTALL_DATA", "install -m 644" }, { "BSD_INSTALL_DATA_DIR", "install -d -m 755" }, { "BSD_INSTALL_MAN", "install -m 644" }, { "BSD_INSTALL_MAN_DIR", "install -d -m 755" }, { "BSD_INSTALL_GAME", "install -m 755" }, { "BSD_INSTALL_GAME_DIR", "install -d -m 755" }, { "INSTALL", "install" }, { "FIND", "find" }, { "BUILDLINK_X11_DIR", "/nonexistent/buildlink" }, { "BUILDLINK_DIR", "/nonexistent/buildlink" }, { "ECHO_MSG", "echo" }, { "STEP_MSG", "echo" }, { "WARNING_MSG", "echo" }, { "PHASE_MSG", "echo" }, { "ERROR_MSG", "echo" }, { "FAIL_MSG", "echo" }, { "INFO_MSG", "echo" }, { "XARGS", "xargs" }, { "AWK", "awk" }, { "GREP", "grep" }, { "EGREP", "grep -E" }, { "HEAD", "head" }, { "TAIL", "tail" }, { "TR", "tr" }, { "SORT", "sort" }, { "WC", "wc" }, { "CMP", "cmp" }, { "DIFF", "diff" }, { "BASENAME", "basename" }, { "DIRNAME", "dirname" }, { "PWD", "pwd" }, { "TOOLS_PLATFORM.pwd", "/bin/pwd" }, { "INSTALL_PROGRAM", "install -m 755" }, { "INSTALL_LIB", "install -m 755" }, { "INSTALL_LIB_DIR", "install -d -m 755" }, { "INSTALL_GAME", "install -m 755" }, { "INSTALL_GAME_DATA", "install -m 644" }, { "INSTALL_SCRIPT", "install -m 755" }, { "INSTALL_DATA", "install -m 644" },
             { "INSTALL_MAN", "install -m 644" }, { "INSTALL_PROGRAM_DIR", "install -d -m 755" }, { "INSTALL_DATA_DIR", "install -d -m 755" },
             { "INSTALL_SCRIPT_DIR", "install -d -m 755" }, { "INSTALL_MAN_DIR", "install -d -m 755" }, { "CC", "cc" }, { "LIBTOOL", "libtool" }, { "COMPILER_RPATH_FLAG", "-Wl,-rpath," }, { "PKG_SYSCONFDIR", "/etc" }, { "VARBASE", "/var" }, { "MACHINE_GNU_ARCH", "x86_64" }, { "MACHINE_GNU_PLATFORM", "x86_64-pc-linux-gnu" }, { "PKG_SHELL", "" }, { "BINMODE", "755" }, { "NONBINMODE", "644" }, { "LIBMODE", "644" }, { "SHAREMODE", "644" }, { "MANMODE", "644" }, { "DIRMODE", "755" }, { "BINOWN", "$(id -un)" }, { "BINGRP", "$(id -gn)" }, { "SHAREOWN", "$(id -un)" }, { "SHAREGRP", "$(id -gn)" }, { "MANOWN", "$(id -un)" }, { "MANGRP", "$(id -gn)" }, { "REAL_ROOT_USER", "root" }, { "REAL_ROOT_GROUP", "root" }, { "RUN", "" }, { "RCD_SCRIPTS_DIR", "/etc/rc.d" }, { NULL, NULL }
         };
@@ -989,6 +989,9 @@ static struct recipe *parse_pkgsrc(const char *id, const char *dir, const char *
         char *ckey = fmt("CONFIGURE_ARGS.%s", strrchr(id, '/') ? strrchr(id, '/') + 1 : id);
         if (conf_get(ckey)) cfg = fmt("%s %s", cfg, conf_get(ckey));
         free(ckey);
+        ckey = fmt("SERIAL.%s", strrchr(id, '/') ? strrchr(id, '/') + 1 : id);
+        int serial = conf_get(ckey) != NULL;
+        free(ckey);
         char *mflags = fmt("%s%s%s %s", var_get(&vs, "USE_BSD_MAKEFILE") ? "BINDIR=$PREFIX/bin MANDIR=$PREFIX/man LIBDIR=$PREFIX/lib BINOWN=$(id -un) BINGRP=$(id -gn) MANOWN=$(id -un) MANGRP=$(id -gn) LIBOWN=$(id -un) LIBGRP=$(id -gn) " : "", var_get(&vs, "USE_LIBTOOL") ? "LIBTOOL=libtool " : "", var_get(&vs, "MAKE_FLAGS") ? expand(&vs, var_get(&vs, "MAKE_FLAGS"), 0) : "", var_get(&vs, "BUILD_MAKE_FLAGS") ? expand(&vs, var_get(&vs, "BUILD_MAKE_FLAGS"), 0) : "");
         char *menv = var_get(&vs, "MAKE_ENV") ? expand(&vs, var_get(&vs, "MAKE_ENV"), 0) : xstrdup("");
         char *cenv = var_get(&vs, "CONFIGURE_ENV") ? expand(&vs, var_get(&vs, "CONFIGURE_ENV"), 0) : xstrdup("");
@@ -1016,7 +1019,8 @@ static struct recipe *parse_pkgsrc(const char *id, const char *dir, const char *
         cmd = steps;
         cmd += sprintf(cmd, "export BSD_INSTALL_PROGRAM='install -m 755' BSD_INSTALL_PROGRAM_DIR='install -d -m 755' BSD_INSTALL_SCRIPT='install -m 755' BSD_INSTALL_SCRIPT_DIR='install -d -m 755' BSD_INSTALL_LIB='install -m 755' BSD_INSTALL_LIB_DIR='install -d -m 755' BSD_INSTALL_DATA='install -m 644' BSD_INSTALL_DATA_DIR='install -d -m 755' BSD_INSTALL_MAN='install -m 644' BSD_INSTALL_MAN_DIR='install -d -m 755'\n");
         if (!var_get(&vs, "TARGET.do-extract")) cmd += sprintf(cmd, "ln -sfn src \"$SRC/../%s\"\n", distname);
-        if (wrksrc && !strncmp(wrksrc, "$SRC/../", 8) && !strchr(wrksrc + 8, '/') && strcmp(wrksrc + 8, distname)) cmd += sprintf(cmd, "ln -sfn src \"%s\"\n", wrksrc);
+        int noget = !r->url && var_get(&vs, "TARGET.do-extract");
+        if (!noget && wrksrc && !strncmp(wrksrc, "$SRC/../", 8) && !strchr(wrksrc + 8, '/') && strcmp(wrksrc + 8, distname)) cmd += sprintf(cmd, "ln -sfn src \"%s\"\n", wrksrc);
         if (wrksrc && strstr(wrksrc, "/") ) {
             char *rel = strstr(wrksrc, distname);
             if (rel && rel[strlen(distname)] == '/') cmd += sprintf(cmd, "cd %s\n", rel + strlen(distname) + 1);
@@ -1031,6 +1035,7 @@ static struct recipe *parse_pkgsrc(const char *id, const char *dir, const char *
         }
         if (hook[0]) {
             cmd += sprintf(cmd, "%s\n", hook[0]);
+            if (noget && wrksrc && !strncmp(wrksrc, "$SRC/../", 8)) cmd += sprintf(cmd, "[ -e %s ] || ln -sfn src %s\n", wrksrc, wrksrc);
             if (wrksrc && !strncmp(wrksrc, "$SRC/../", 8)) cmd += sprintf(cmd, "cd %s\n", wrksrc);
         }
         if (hook[1]) cmd += sprintf(cmd, "%s\n", hook[1]);
@@ -1068,7 +1073,7 @@ static struct recipe *parse_pkgsrc(const char *id, const char *dir, const char *
         else {
             if (hook[5]) cmd += sprintf(cmd, "%s\n", hook[5]);
             if (hook[6]) cmd += sprintf(cmd, "%s\n", hook[6]);
-            else if (!var_get(&vs, "NO_BUILD")) cmd += sprintf(cmd, "%s%s %s %s %s %s\n", var_get(&vs, "USE_BSD_MAKEFILE") ? "env -u DESTDIR " : "", menv, make, var_get(&vs, "MAKE_JOBS_SAFE") && !strcmp(var_get(&vs, "MAKE_JOBS_SAFE"), "no") ? "-j1" : "-j$JOBS", mflags, btarget);
+            else if (!var_get(&vs, "NO_BUILD")) cmd += sprintf(cmd, "%s%s %s %s %s %s\n", var_get(&vs, "USE_BSD_MAKEFILE") ? "env -u DESTDIR " : "", menv, make, serial || (var_get(&vs, "MAKE_JOBS_SAFE") && !strcmp(var_get(&vs, "MAKE_JOBS_SAFE"), "no")) ? "-j1" : "-j$JOBS", mflags, btarget);
             if (hook[7]) cmd += sprintf(cmd, "%s\n", hook[7]);
         }
         {
@@ -1239,6 +1244,28 @@ static char *distfile(const struct recipe *r)
 
 static char *dist_sum(const struct recipe *r, const char *file) { return r->sha512 ? sha512_file(file) : sha256_file(file); }
 
+/* MAG_FETCH if set, else the first of curl, wget and ftp on PATH. It gets the output file and the url */
+static const char *downloader(void)
+{
+    static const char *cmds[][2] = { { "curl", "curl -fsSL -o" }, { "wget", "wget -q -O" }, { "ftp", "ftp -o" } };
+    const char *env = getenv("MAG_FETCH"), *pa = getenv("PATH");
+    int i;
+    if (env) return env;
+    /* this curl hands LibreSSL an empty CApath and fails to load a bundle unless it gets a directory too */
+    if (!access("/etc/ssl/cert.pem", R_OK)) cmds[0][1] = "curl -fsSL --cacert /etc/ssl/cert.pem --capath /etc/ssl -o";
+    for (i = 0; i < 3; i++) {
+        char *p = xstrdup(pa ? pa : "/usr/bin:/bin"), *sv, *d;
+        for (d = strtok_r(p, ":", &sv); d; d = strtok_r(NULL, ":", &sv)) {
+            char *f = fmt("%s/%s", d, cmds[i][0]);
+            int ok = !access(f, X_OK);
+            free(f);
+            if (ok) { free(p); return cmds[i][1]; }
+        }
+        free(p);
+    }
+    return "curl -fsSL -o";
+}
+
 static int fetch(const struct recipe *r)
 {
     char *file, *sum, *tmp;
@@ -1253,7 +1280,7 @@ static int fetch(const struct recipe *r)
     free(sum);
     {
         char *dir = xstrdup(file), *sl = strrchr(dir, '/');
-        const char *cmd = getenv("MAG_FETCH");
+        const char *cmd = downloader();
         *sl = 0;
         mkpath(dir, 0755);
         free(dir);
@@ -1262,7 +1289,7 @@ static int fetch(const struct recipe *r)
             const char *url = i < 0 ? r->url : r->alts.v[i];
             char *av[7];
             printf("==> fetching %s\n", url);
-            av[0] = "/bin/sh"; av[1] = "-c"; av[2] = "set -f; $0 \"$1\" \"$2\""; av[3] = (char *)(cmd ? cmd : "ftp -o");
+            av[0] = "/bin/sh"; av[1] = "-c"; av[2] = "set -f; $0 \"$1\" \"$2\""; av[3] = (char *)cmd;
             av[4] = tmp; av[5] = (char *)url; av[6] = NULL;
             if (run(av, NULL)) { unlink(tmp); continue; }
             sum = dist_sum(r, tmp);
@@ -1500,6 +1527,7 @@ static int install_stage(const struct recipe *r, const char *stage, int explicit
         free(full);
     }
     if (bad && !force) die("not installing %s, -f goes ahead anyway", r->id);
+    bad = 0;
     for (i = 0; i < files.n; i++) {
         char *from = fmt("%s/%s", stage, files.v[i]), *to = fmt("%s/%s", root, files.v[i]), *dir = xstrdup(to), *sl = strrchr(dir, '/');
         struct stat st;
@@ -1785,9 +1813,9 @@ static int cmd_hash(int n, char **files)
 
 static int cmd_sync(void)
 {
-    const char *url = getenv("MAG_SYNC_URL"), *cmd = getenv("MAG_FETCH");
+    const char *url = getenv("MAG_SYNC_URL"), *cmd = downloader();
     char *file = fmt("%s/var/cache/mag/pkgsrc.tar.xz", root), *part = fmt("%s.part", file), *tmp = fmt("%s/usr/pkgsrc.sync", root), *tree = fmt("%s/usr/pkgsrc", root), *from = fmt("%s/pkgsrc", tmp);
-    char *dl[] = { "/bin/sh", "-c", "set -f; $0 \"$1\" \"$2\"", (char *)(cmd ? cmd : "ftp -o"), part, (char *)(url ? url : "https://ftp.netbsd.org/pub/pkgsrc/current/pkgsrc.tar.xz"), NULL };
+    char *dl[] = { "/bin/sh", "-c", "set -f; $0 \"$1\" \"$2\"", (char *)cmd, part, (char *)(url ? url : "https://ftp.netbsd.org/pub/pkgsrc/current/pkgsrc.tar.xz"), NULL };
     char *un[] = { "tar", "-xf", file, "-C", tmp, NULL };
     char *rm[] = { "rm", "-rf", tree, NULL };
     char *dir = xstrdup(file);
@@ -1914,7 +1942,7 @@ static void usage(void)
          "\n"
          "MAG_ROOT installs somewhere else than /, MAG_REPO is a list of repos split by colons (default\n"
          "/usr/share/mag/repo:/usr/pkgsrc), MAG_SYNC_URL is where sync gets the tree,\n"
-         "MAG_FETCH is the download command, which gets a file and an url (default ftp -o), MAG_PREFIX is $PREFIX for the steps, /usr, and MAG_JOBS is $JOBS, 4");
+         "MAG_FETCH is the download command, which gets a file and an url (default curl, else wget, else ftp), MAG_PREFIX is $PREFIX for the steps, /usr, and MAG_JOBS is $JOBS, 4");
 }
 
 int main(int argc, char **argv)

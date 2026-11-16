@@ -1,0 +1,9 @@
+desc: wrapper around the evdev input device interface of the kernel
+version: 1.14.0
+url: https://www.freedesktop.org/software/libevdev/libevdev-${version}.tar.xz
+sha256: 5a0966c7110648665983848bad696c7acba614a2160d2865d535397101007332
+deps:
+steps:
+	./configure --prefix=$PREFIX --disable-static
+	make -j$JOBS
+	make DESTDIR=$DESTDIR install

@@ -6,6 +6,7 @@ deps:
 steps:
 	tar -xzf linux-lts-*.apk 2>/dev/null || true
 	kv=$(ls lib/modules)
+	rm -f lib/modules/$kv/vmlinuz
 	install -Dm644 boot/vmlinuz-lts $DESTDIR/boot/vmlinuz-$kv
 	install -Dm644 boot/config-$kv $DESTDIR/boot/config-$kv
 	install -Dm644 boot/System.map-$kv $DESTDIR/boot/System.map-$kv
