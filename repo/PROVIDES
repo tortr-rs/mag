@@ -37,3 +37,5 @@ math/nickle -
 devel/cmake -
 misc/pciids sys-apps/pciids
 textproc/py-docutils -
+lang/mawk lang/nawk
+lang/gawk lang/nawk

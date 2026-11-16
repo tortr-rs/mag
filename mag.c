@@ -1011,7 +1011,8 @@ static struct recipe *parse_pkgsrc(const char *id, const char *dir, const char *
             free(mk);
         }
         var_set(&vs, "MAKE", make);
-        if (var_get(&vs, "MAG_MESON")) dep_add(r, "devel/samurai");
+        if (var_get(&vs, "MAG_MESON")) { dep_add(r, "devel/samurai"); dep_add(r, "devel/meson"); }
+        if (var_get(&vs, "USE_CMAKE")) dep_add(r, "devel/cmake");
         if (var_get(&vs, "USE_LIBTOOL")) dep_add(r, "dev-build/libtool");
         { int ti; for (ti = 0; ti < vs.n; ti++) if (!strncmp(vs.k[ti], "TARGET.", 7)) cap += strlen(vs.v[ti]) * 4; }
         steps = xmalloc(cap + strlen(cfg) + strlen(mflags) + strlen(menv) + strlen(cenv) + 1024);
@@ -1083,12 +1084,12 @@ static struct recipe *parse_pkgsrc(const char *id, const char *dir, const char *
             free(dirs);
         }
         if (var_get(&vs, "AUTO_MKDIRS")) cmd += sprintf(cmd, "mkdir -p $DESTDIR$PREFIX/bin $DESTDIR$PREFIX/sbin $DESTDIR$PREFIX/lib $DESTDIR$PREFIX/share $DESTDIR$PREFIX/man/man1 $DESTDIR$PREFIX/man/man5 $DESTDIR$PREFIX/man/man8\n");
-        if (hook[8]) cmd += sprintf(cmd, "%s\n", hook[8]);
-        if (hook[9]) cmd += sprintf(cmd, "%s\n", hook[9]);
+        if (hook[8]) cmd += sprintf(cmd, "(cd \"$RECIPE_DIR\" || exit 1\n%s\n)\n", hook[8]);
+        if (hook[9]) cmd += sprintf(cmd, "(cd \"$RECIPE_DIR\" || exit 1\n%s\n)\n", hook[9]);
         else if (cmake) cmd += sprintf(cmd, "DESTDIR=$DESTDIR samu install\n");
         else if (meson) cmd += sprintf(cmd, "DESTDIR=$DESTDIR samu -C mag-build install\n");
         else cmd += sprintf(cmd, "%s %s DESTDIR=$DESTDIR %s %s\n", menv, make, mflags, itarget);
-        if (hook[10]) cmd += sprintf(cmd, "%s\n", hook[10]);
+        if (hook[10]) cmd += sprintf(cmd, "(cd \"$RECIPE_DIR\" || exit 1\n%s\n)\n", hook[10]);
         for (hi = 0; hn[hi]; hi++) free(hook[hi]);
         r->steps = r->url || own_extract ? steps : xstrdup("true\n");
         free(cfg); free(mflags); free(menv); free(cenv); free(btarget); free(itarget); free(wrksrc); free(pd);
@@ -1511,6 +1512,27 @@ static void delete_files(const struct list *files)
     }
 }
 
+/* the same file in both places: same link target, or same contents */
+static int same_file(const char *a, const char *b)
+{
+    struct stat sa, sb;
+    char *ha, *hb;
+    int same;
+    if (lstat(a, &sa) < 0 || lstat(b, &sb) < 0) return 0;
+    if (S_ISLNK(sa.st_mode) || S_ISLNK(sb.st_mode)) {
+        char ta[PATH_MAX], tb[PATH_MAX];
+        ssize_t na, nb;
+        if (!S_ISLNK(sa.st_mode) || !S_ISLNK(sb.st_mode)) return 0;
+        na = readlink(a, ta, sizeof ta - 1); nb = readlink(b, tb, sizeof tb - 1);
+        return na >= 0 && na == nb && !memcmp(ta, tb, na);
+    }
+    if (!S_ISREG(sa.st_mode) || !S_ISREG(sb.st_mode) || sa.st_size != sb.st_size) return 0;
+    ha = sha256_file(a); hb = sha256_file(b);
+    same = ha && hb && !strcmp(ha, hb);
+    free(ha); free(hb);
+    return same;
+}
+
 static int install_stage(const struct recipe *r, const char *stage, int explicit)
 {
     struct list files = { 0 }, old, kept = { 0 };
@@ -1522,11 +1544,16 @@ static int install_stage(const struct recipe *r, const char *stage, int explicit
     for (i = 0; i < files.n; i++) {
         const char *o = owner_of(files.v[i]);
         char *full = fmt("%s/%s", root, files.v[i]);
-        if (o && strcmp(o, r->id)) { say("%s wants %s, which %s has", r->id, files.v[i], o); bad = 1; }
-        else if (!o && exists(full) && strncmp(files.v[i], "etc/", 4)) { say("%s wants %s, which is there already", r->id, files.v[i]); bad = 1; }
+        if (o && strcmp(o, r->id)) { say("%s wants %s, which %s has", r->id, files.v[i], o); bad++; }
+        else if (!o && exists(full) && strncmp(files.v[i], "etc/", 4)) {
+            char *from = fmt("%s/%s", stage, files.v[i]);
+            if (!same_file(from, full)) { if (bad < 5) say("%s wants %s, which is there already and is different", r->id, files.v[i]); bad++; }
+            free(from);
+        }
         free(full);
     }
-    if (bad && !force) die("not installing %s, -f goes ahead anyway", r->id);
+    if (bad > 5) say("and %d more", bad - 5);
+    if (bad && !force) die("not installing %s, %d files are in the way, -f writes over them", r->id, bad);
     bad = 0;
     for (i = 0; i < files.n; i++) {
         char *from = fmt("%s/%s", stage, files.v[i]), *to = fmt("%s/%s", root, files.v[i]), *dir = xstrdup(to), *sl = strrchr(dir, '/');

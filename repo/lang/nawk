@@ -1,0 +1,13 @@
+desc: the one true awk, small enough to build before anything else; bmake and every configure script need an awk
+version: 7.2
+url: https://github.com/apple-oss-distributions/awk/archive/refs/tags/awk-${version}.tar.gz
+sha256: 265cd9f0f69953b5cbce3c648f77de8faf3fcb9fa0bb7bc56b49824fe3ac0039
+deps:
+steps:
+	cd awk
+	sed -i "s/\*getline(/*awkgetline(/" proto.h run.c
+	sed -i "105s/.*/\t{ GETLINE, \"awkgetline\", \"getline\" },/" maketab.c
+	sed -i "/mv proctab.c proctab.c.orig/d" makefile
+	make YACC="yacc -d" HOSTCC=cc CC=cc CFLAGS=-O2
+	install -Dm755 a.out $DESTDIR$PREFIX/bin/awk
+	ln -sf awk $DESTDIR$PREFIX/bin/nawk
