@@ -1,0 +1,10 @@
+desc: bash, which every ebuild runs in
+version: 5.3
+url: https://ftp.gnu.org/gnu/bash/bash-${version}.tar.gz
+sha256: 0d5cd86965f869a26cf64f4b71be7b96f90a3ba8b3d74e27e8e9d9d5550f31ba
+deps:
+steps:
+	./configure --prefix=$PREFIX --without-bash-malloc --disable-nls
+	make -j$JOBS
+	make DESTDIR=$DESTDIR install
+	rm -rf $DESTDIR$PREFIX/share/info $DESTDIR$PREFIX/share/doc $DESTDIR$PREFIX/share/locale
