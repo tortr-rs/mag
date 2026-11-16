@@ -830,7 +830,7 @@ static char *distinfo_hash(const char *text, const char *algo, const char *file)
 }
 
 static const char *const tool_pkgs[][2] = {
-    { "gmake", "devel/gmake" }, { "bison", "devel/bison" }, { "m4", "devel/m4" }, { "flex", "devel/flex" }, { "pkg-config", "devel/pkgconf" },
+    { "gmake", "devel/gmake" }, { "bison", "devel/bison" }, { "m4", "devel/m4" }, { "gm4", "devel/m4" }, { "lex", "devel/flex" }, { "flex", "devel/flex" }, { "pkg-config", "devel/pkgconf" },
     { "perl", "lang/perl5" }, { "autoconf", "devel/autoconf" }, { "automake", "devel/automake" }, { "libtool", "devel/libtool-base" },
     { "gettext", "devel/gettext-tools" }, { "msgfmt", "devel/gettext-tools" }, { "patch", "devel/patch" }, { "yacc", "devel/byacc" },
     { "cmake", "devel/cmake" }, { "ninja", "devel/samurai" }, { NULL, NULL } };
