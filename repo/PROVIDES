@@ -33,3 +33,5 @@ textproc/py-docutils -
 lang/mawk lang/nawk
 lang/gawk lang/nawk
 lang/perl5 dev-lang/perl
+devel/p5-gettext -
+converters/help2man -
