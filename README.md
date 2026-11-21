@@ -17,6 +17,13 @@ command (curl, else wget, else ftp).
 indexes are signed with, `/etc/mag/arch` which builds to get, `x86_64` or `x86` and so on. It is written on
 the first install, and without it mag goes by the machine.
 
+CRUX ports work too. A line `crux https://crux.nu/ports/crux-3.8/opt` in `/etc/mag/repos` is a port tree: `mag
+update` gets the files that changed, as httpup does, and `mag build foo` builds the port and installs it. The
+`.signature` of the port is checked with its key (`opt.pub` in `/etc/mag/keys`, ed25519 is in mag too), then
+the sources against it, and `build()` runs with bash. What a repo has built wins over a port of the same name;
+`mag install` takes a port only when no repo has it. A port gets build-base, pkgconf and bash, and the `-dev`
+package of every dependency that comes built.
+
 What it does on the way: files are checked against what other packages own before anything is touched, they
 are put in place with a rename so a running program is never half written, and a changed file under /etc is
 left alone (the new one comes as `.new`). A package's scripts run inside the root; one whose interpreter is not

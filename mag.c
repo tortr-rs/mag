@@ -1,6 +1,6 @@
-/* mag: the package manager, one C file on c.h. it installs prebuilt packages from apk repos: the repos are
- * listed in /etc/mag/repos, their keys are in /etc/mag/keys. it does its own gzip, tar and rsa, so all it
- * needs from the system is a download command. "mag help" says the rest */
+/* mag: the package manager, one C file on c.h. it installs prebuilt packages from apk repos, and builds
+ * CRUX ports: the repos are listed in /etc/mag/repos, their keys are in /etc/mag/keys. it does its own gzip,
+ * tar, rsa and ed25519, so all it needs from the system is a download command, and bash for ports */
 #if defined(__x86_64__) && !defined(LIBC)
 #include "c.h"
 #else
@@ -792,6 +792,252 @@ static int rsa_verify(const char *keyfile, const unsigned char *sig, size_t sigl
     return 0;
 }
 
+/* ---- sha512 and ed25519, for the signify signatures of port trees ---- */
+
+static const uint64_t k512[80] = {
+    0x428a2f98d728ae22ull, 0x7137449123ef65cdull, 0xb5c0fbcfec4d3b2full, 0xe9b5dba58189dbbcull, 0x3956c25bf348b538ull, 0x59f111f1b605d019ull,
+    0x923f82a4af194f9bull, 0xab1c5ed5da6d8118ull, 0xd807aa98a3030242ull, 0x12835b0145706fbeull, 0x243185be4ee4b28cull, 0x550c7dc3d5ffb4e2ull,
+    0x72be5d74f27b896full, 0x80deb1fe3b1696b1ull, 0x9bdc06a725c71235ull, 0xc19bf174cf692694ull, 0xe49b69c19ef14ad2ull, 0xefbe4786384f25e3ull,
+    0x0fc19dc68b8cd5b5ull, 0x240ca1cc77ac9c65ull, 0x2de92c6f592b0275ull, 0x4a7484aa6ea6e483ull, 0x5cb0a9dcbd41fbd4ull, 0x76f988da831153b5ull,
+    0x983e5152ee66dfabull, 0xa831c66d2db43210ull, 0xb00327c898fb213full, 0xbf597fc7beef0ee4ull, 0xc6e00bf33da88fc2ull, 0xd5a79147930aa725ull,
+    0x06ca6351e003826full, 0x142929670a0e6e70ull, 0x27b70a8546d22ffcull, 0x2e1b21385c26c926ull, 0x4d2c6dfc5ac42aedull, 0x53380d139d95b3dfull,
+    0x650a73548baf63deull, 0x766a0abb3c77b2a8ull, 0x81c2c92e47edaee6ull, 0x92722c851482353bull, 0xa2bfe8a14cf10364ull, 0xa81a664bbc423001ull,
+    0xc24b8b70d0f89791ull, 0xc76c51a30654be30ull, 0xd192e819d6ef5218ull, 0xd69906245565a910ull, 0xf40e35855771202aull, 0x106aa07032bbd1b8ull,
+    0x19a4c116b8d2d0c8ull, 0x1e376c085141ab53ull, 0x2748774cdf8eeb99ull, 0x34b0bcb5e19b48a8ull, 0x391c0cb3c5c95a63ull, 0x4ed8aa4ae3418acbull,
+    0x5b9cca4f7763e373ull, 0x682e6ff3d6b2b8a3ull, 0x748f82ee5defb2fcull, 0x78a5636f43172f60ull, 0x84c87814a1f0ab72ull, 0x8cc702081a6439ecull,
+    0x90befffa23631e28ull, 0xa4506cebde82bde9ull, 0xbef9a3f7b2c67915ull, 0xc67178f2e372532bull, 0xca273eceea26619cull, 0xd186b8c721c0c207ull,
+    0xeada7dd6cde0eb1eull, 0xf57d4f7fee6ed178ull, 0x06f067aa72176fbaull, 0x0a637dc5a2c898a6ull, 0x113f9804bef90daeull, 0x1b710b35131c471bull,
+    0x28db77f523047d84ull, 0x32caab7b40c72493ull, 0x3c9ebe0a15c9bebcull, 0x431d67c49c100d4cull, 0x4cc5d4becb3e42b6ull, 0x597f299cfc657e2aull,
+    0x5fcb6fab3ad6faecull, 0x6c44198c4a475817ull };
+
+#define ROR64(x, n) ((x) >> (n) | (x) << (64 - (n)))
+
+static void sha512(const unsigned char *m, size_t n, unsigned char *out)
+{
+    static const uint64_t iv[8] = { 0x6a09e667f3bcc908ull, 0xbb67ae8584caa73bull, 0x3c6ef372fe94f82bull, 0xa54ff53a5f1d36f1ull,
+        0x510e527fade682d1ull, 0x9b05688c2b3e6c1full, 0x1f83d9abfb41bd6bull, 0x5be0cd19137e2179ull };
+    size_t len = (n + 17 + 127) / 128 * 128, b;
+    unsigned char *p = xmalloc(len);
+    uint64_t h[8], w[80], v[8];
+    int i, j;
+    memset(p, 0, len);
+    memcpy(p, m, n);
+    p[n] = 0x80;
+    for (j = 0; j < 8; j++) p[len - 1 - j] = (uint64_t)n * 8 >> (8 * j);
+    memcpy(h, iv, sizeof h);
+    for (b = 0; b < len; b += 128) {
+        for (j = 0; j < 16; j++) for (w[j] = 0, i = 0; i < 8; i++) w[j] = w[j] << 8 | p[b + j * 8 + i];
+        for (j = 16; j < 80; j++)
+            w[j] = w[j - 16] + (ROR64(w[j - 15], 1) ^ ROR64(w[j - 15], 8) ^ w[j - 15] >> 7) + w[j - 7] + (ROR64(w[j - 2], 19) ^ ROR64(w[j - 2], 61) ^ w[j - 2] >> 6);
+        memcpy(v, h, sizeof v);
+        for (j = 0; j < 80; j++) {
+            uint64_t t1 = v[7] + (ROR64(v[4], 14) ^ ROR64(v[4], 18) ^ ROR64(v[4], 41)) + ((v[4] & v[5]) ^ (~v[4] & v[6])) + k512[j] + w[j];
+            uint64_t t2 = (ROR64(v[0], 28) ^ ROR64(v[0], 34) ^ ROR64(v[0], 39)) + ((v[0] & v[1]) ^ (v[0] & v[2]) ^ (v[1] & v[2]));
+            memmove(v + 1, v, 7 * sizeof *v);
+            v[4] += t1;
+            v[0] = t1 + t2;
+        }
+        for (j = 0; j < 8; j++) h[j] += v[j];
+    }
+    for (j = 0; j < 64; j++) out[j] = h[j / 8] >> (56 - 8 * (j % 8));
+    free(p);
+}
+
+/* the field and curve of ed25519 the way tweetnacl does them: 16 limbs of 16 bits */
+typedef int64_t gf[16];
+
+static const gf gf0, gf1 = { 1 },
+    ed_d = { 0x78a3, 0x1359, 0x4dca, 0x75eb, 0xd8ab, 0x4141, 0x0a4d, 0x0070, 0xe898, 0x7779, 0x4079, 0x8cc7, 0xfe73, 0x2b6f, 0x6cee, 0x5203 },
+    ed_d2 = { 0xf159, 0x26b2, 0x9b94, 0xebd6, 0xb156, 0x8283, 0x149a, 0x00e0, 0xd130, 0xeef3, 0x80f2, 0x198e, 0xfce7, 0x56df, 0xd9dc, 0x2406 },
+    ed_x = { 0xd51a, 0x8f25, 0x2d60, 0xc956, 0xa7b2, 0x9525, 0xc760, 0x692c, 0xdc5c, 0xfdd6, 0xe231, 0xc0a4, 0x53fe, 0xcd6e, 0x36d3, 0x2169 },
+    ed_y = { 0x6658, 0x6666, 0x6666, 0x6666, 0x6666, 0x6666, 0x6666, 0x6666, 0x6666, 0x6666, 0x6666, 0x6666, 0x6666, 0x6666, 0x6666, 0x6666 },
+    ed_i = { 0xa0b0, 0x4a0e, 0x1b27, 0xc4ee, 0xe478, 0xad2f, 0x1806, 0x2f43, 0xd7a7, 0x3dfb, 0x0099, 0x2b4d, 0xdf0b, 0x4fc1, 0x2480, 0x2b83 };
+
+static void fe_copy(gf o, const gf a) { memcpy(o, a, sizeof(gf)); }
+
+static void fe_carry(gf o)
+{
+    int i;
+    for (i = 0; i < 16; i++) {
+        int64_t c;
+        o[i] += 1LL << 16;
+        c = o[i] >> 16;
+        o[(i + 1) * (i < 15)] += c - 1 + 37 * (c - 1) * (i == 15);
+        o[i] -= c << 16;
+    }
+}
+
+static void fe_sel(gf p, gf q, int b)
+{
+    int64_t t, c = ~(b - 1);
+    int i;
+    for (i = 0; i < 16; i++) { t = c & (p[i] ^ q[i]); p[i] ^= t; q[i] ^= t; }
+}
+
+static void fe_pack(unsigned char *o, const gf n)
+{
+    gf m, t;
+    int i, j, b;
+    fe_copy(t, n);
+    fe_carry(t); fe_carry(t); fe_carry(t);
+    for (j = 0; j < 2; j++) {
+        m[0] = t[0] - 0xffed;
+        for (i = 1; i < 15; i++) { m[i] = t[i] - 0xffff - ((m[i - 1] >> 16) & 1); m[i - 1] &= 0xffff; }
+        m[15] = t[15] - 0x7fff - ((m[14] >> 16) & 1);
+        b = (m[15] >> 16) & 1;
+        m[14] &= 0xffff;
+        fe_sel(t, m, 1 - b);
+    }
+    for (i = 0; i < 16; i++) { o[2 * i] = t[i] & 0xff; o[2 * i + 1] = t[i] >> 8; }
+}
+
+static int fe_neq(const gf a, const gf b)
+{
+    unsigned char c[32], d[32];
+    fe_pack(c, a); fe_pack(d, b);
+    return memcmp(c, d, 32) != 0;
+}
+
+static int fe_par(const gf a) { unsigned char d[32]; fe_pack(d, a); return d[0] & 1; }
+
+static void fe_unpack(gf o, const unsigned char *n)
+{
+    int i;
+    for (i = 0; i < 16; i++) o[i] = n[2 * i] + ((int64_t)n[2 * i + 1] << 8);
+    o[15] &= 0x7fff;
+}
+
+static void fe_add(gf o, const gf a, const gf b) { int i; for (i = 0; i < 16; i++) o[i] = a[i] + b[i]; }
+static void fe_sub(gf o, const gf a, const gf b) { int i; for (i = 0; i < 16; i++) o[i] = a[i] - b[i]; }
+
+static void fe_mul(gf o, const gf a, const gf b)
+{
+    int64_t t[31];
+    int i, j;
+    memset(t, 0, sizeof t);
+    for (i = 0; i < 16; i++) for (j = 0; j < 16; j++) t[i + j] += a[i] * b[j];
+    for (i = 0; i < 15; i++) t[i] += 38 * t[i + 16];
+    for (i = 0; i < 16; i++) o[i] = t[i];
+    fe_carry(o); fe_carry(o);
+}
+
+static void fe_inv(gf o, const gf in)
+{
+    gf c;
+    int a;
+    fe_copy(c, in);
+    for (a = 253; a >= 0; a--) { fe_mul(c, c, c); if (a != 2 && a != 4) fe_mul(c, c, in); }
+    fe_copy(o, c);
+}
+
+static void fe_pow2523(gf o, const gf in)
+{
+    gf c;
+    int a;
+    fe_copy(c, in);
+    for (a = 250; a >= 0; a--) { fe_mul(c, c, c); if (a != 1) fe_mul(c, c, in); }
+    fe_copy(o, c);
+}
+
+static void pt_add(gf p[4], gf q[4])
+{
+    gf a, b, c, d, t, e, f, g, h;
+    fe_sub(a, p[1], p[0]); fe_sub(t, q[1], q[0]); fe_mul(a, a, t);
+    fe_add(b, p[0], p[1]); fe_add(t, q[0], q[1]); fe_mul(b, b, t);
+    fe_mul(c, p[3], q[3]); fe_mul(c, c, ed_d2);
+    fe_mul(d, p[2], q[2]); fe_add(d, d, d);
+    fe_sub(e, b, a); fe_sub(f, d, c); fe_add(g, d, c); fe_add(h, b, a);
+    fe_mul(p[0], e, f); fe_mul(p[1], h, g); fe_mul(p[2], g, f); fe_mul(p[3], e, h);
+}
+
+static void pt_mul(gf p[4], gf q[4], const unsigned char *s)
+{
+    int i, j;
+    fe_copy(p[0], gf0); fe_copy(p[1], gf1); fe_copy(p[2], gf1); fe_copy(p[3], gf0);
+    for (i = 255; i >= 0; i--) {
+        int b = (s[i / 8] >> (i & 7)) & 1;
+        for (j = 0; j < 4; j++) fe_sel(p[j], q[j], b);
+        pt_add(q, p);
+        pt_add(p, p);
+        for (j = 0; j < 4; j++) fe_sel(p[j], q[j], b);
+    }
+}
+
+static void pt_pack(unsigned char *r, gf p[4])
+{
+    gf tx, ty, zi;
+    fe_inv(zi, p[2]);
+    fe_mul(tx, p[0], zi);
+    fe_mul(ty, p[1], zi);
+    fe_pack(r, ty);
+    r[31] ^= fe_par(tx) << 7;
+}
+
+static int pt_unpackneg(gf r[4], const unsigned char *p)
+{
+    gf t, chk, num, den, den2, den4, den6;
+    fe_copy(r[2], gf1);
+    fe_unpack(r[1], p);
+    fe_mul(num, r[1], r[1]);
+    fe_mul(den, num, ed_d);
+    fe_sub(num, num, r[2]);
+    fe_add(den, r[2], den);
+    fe_mul(den2, den, den); fe_mul(den4, den2, den2); fe_mul(den6, den4, den2);
+    fe_mul(t, den6, num); fe_mul(t, t, den);
+    fe_pow2523(t, t);
+    fe_mul(t, t, num); fe_mul(t, t, den); fe_mul(t, t, den); fe_mul(r[0], t, den);
+    fe_mul(chk, r[0], r[0]); fe_mul(chk, chk, den);
+    if (fe_neq(chk, num)) fe_mul(r[0], r[0], ed_i);
+    fe_mul(chk, r[0], r[0]); fe_mul(chk, chk, den);
+    if (fe_neq(chk, num)) return -1;
+    if (fe_par(r[0]) == (p[31] >> 7)) fe_sub(r[0], gf0, r[0]);
+    fe_mul(r[3], r[0], r[1]);
+    return 0;
+}
+
+/* a 64 byte number mod the order of the curve */
+static void mod_l(unsigned char *r)
+{
+    static const int64_t l[32] = { 0xed, 0xd3, 0xf5, 0x5c, 0x1a, 0x63, 0x12, 0x58, 0xd6, 0x9c, 0xf7, 0xa2, 0xde, 0xf9, 0xde, 0x14,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x10 };
+    int64_t x[64], carry;
+    int i, j;
+    for (i = 0; i < 64; i++) x[i] = r[i];
+    for (i = 63; i >= 32; i--) {
+        carry = 0;
+        for (j = i - 32; j < i - 12; j++) { x[j] += carry - 16 * x[i] * l[j - (i - 32)]; carry = (x[j] + 128) >> 8; x[j] -= carry * 256; }
+        x[j] += carry;
+        x[i] = 0;
+    }
+    carry = 0;
+    for (j = 0; j < 32; j++) { x[j] += carry - (x[31] >> 4) * l[j]; carry = x[j] >> 8; x[j] &= 255; }
+    for (j = 0; j < 32; j++) x[j] -= carry * l[j];
+    for (i = 0; i < 32; i++) { x[i + 1] += x[i] >> 8; r[i] = x[i] & 255; }
+}
+
+static int ed25519_ok(const unsigned char *sig, const unsigned char *pk, const char *m, size_t n)
+{
+    gf p[4], q[4];
+    unsigned char t[32], h[64], *b;
+    if (pt_unpackneg(q, pk)) return 0;
+    b = xmalloc(n + 64);
+    memcpy(b, sig, 32);
+    memcpy(b + 32, pk, 32);
+    memcpy(b + 64, m, n);
+    sha512(b, n + 64, h);
+    free(b);
+    mod_l(h);
+    pt_mul(p, q, h);
+    fe_copy(q[0], ed_x); fe_copy(q[1], ed_y); fe_copy(q[2], gf1); fe_mul(q[3], ed_x, ed_y);
+    {
+        gf r[4];
+        pt_mul(r, q, sig + 32);
+        pt_add(p, r);
+    }
+    pt_pack(t, p);
+    return !memcmp(t, sig, 32);
+}
+
 /* ---- the repos ---- */
 
 struct pkg { char *name, *ver, *desc, *csum, *deps, *prov, *size; int prio, repo; };
@@ -802,6 +1048,8 @@ static int npkgs;
 static struct prov *provs;
 static int nprovs;
 static struct list repo_urls;
+static int *kinds;
+enum { APK, CRUX };
 
 static char *confdir(void)
 {
@@ -838,18 +1086,34 @@ static void load_repos(void)
         if (next) *next++ = 0;
         while (*line == ' ' || *line == '\t') line++;
         for (s = line + strlen(line); s > line && (s[-1] == ' ' || s[-1] == '\t' || s[-1] == '\r' || s[-1] == '/'); ) *--s = 0;
-        if (*line && *line != '#') push(&repo_urls, xstrdup(line));
+        if (!*line || *line == '#') continue;
+        kinds = xrealloc(kinds, (repo_urls.n + 1) * sizeof *kinds);
+        kinds[repo_urls.n] = APK;
+        if (!strncmp(line, "crux", 4) && (line[4] == ' ' || line[4] == '\t')) for (kinds[repo_urls.n] = CRUX, line += 4; *line == ' ' || *line == '\t'; line++) {}
+        push(&repo_urls, xstrdup(line));
     }
     free(t); free(f); free(d);
 }
 
 static char *repo_base(int i) { return fmt("%s/%s", repo_urls.v[i], arch); }
 
+static char *flat(int i)
+{
+    char *u = xstrdup(repo_urls.v[i]), *s;
+    for (s = u; *s; s++) if (*s == '/' || *s == ':' || *s == '\'') *s = '_';
+    return u;
+}
+
 static char *index_file(int i)
 {
-    char *u = xstrdup(repo_urls.v[i]), *s, *f;
-    for (s = u; *s; s++) if (*s == '/' || *s == ':') *s = '_';
-    f = fmt("%s/var/cache/mag/index/%s_%s.tar.gz", root, u, arch);
+    char *u = flat(i), *f = fmt("%s/var/cache/mag/index/%s_%s.tar.gz", root, u, arch);
+    free(u);
+    return f;
+}
+
+static char *tree_dir(int i)
+{
+    char *u = flat(i), *f = fmt("%s/var/cache/mag/ports/%s", root, u);
     free(u);
     return f;
 }
@@ -976,7 +1240,14 @@ static void load_index(void)
     if (loaded++) return;
     for (i = 0; i < repo_urls.n; i++) {
         char *f = index_file(i);
-        int fd = open(f, O_RDONLY);
+        int fd;
+        if (kinds[i] != APK) {
+            char *d = tree_dir(i), *x = fmt("%s/INDEX", d), *t = slurp(x, NULL);
+            if (t) parse_index(t, i); else say("%s has no index yet, mag update gets it", repo_urls.v[i]);
+            free(d); free(x); free(f);
+            continue;
+        }
+        fd = open(f, O_RDONLY);
         struct in *r;
         struct tar t;
         struct ent *e;
@@ -1121,11 +1392,24 @@ static struct pkg *pick(const struct dep *d)
     return best;
 }
 
+/* packages to build from a port tree even when a repo has them built */
+static struct list from_ports;
+
+static struct pkg *port_of(const char *name)
+{
+    struct pkg *best = NULL;
+    int i;
+    for (i = 0; i < npkgs; i++)
+        if (kinds[pkgs[i].repo] != APK && !strcmp(pkgs[i].name, name) && (!best || vercmp(pkgs[i].ver, best->ver) > 0)) best = &pkgs[i];
+    return best;
+}
+
 static struct pkg *newest(const char *name)
 {
     struct dep d;
     struct pkg *p;
     dep_parse(name, &d);
+    if (has(&from_ports, d.key) && (p = port_of(d.key))) return p;
     p = pick(&d);
     return p && !strcmp(p->name, d.key) ? p : NULL;
 }
@@ -1472,6 +1756,274 @@ static void triggers(const struct list *changed)
     }
 }
 
+/* ---- port trees: CRUX ports, built here from their Pkgfile ---- */
+
+/* the text a signify file signs, if its signature checks out with the key its first line names */
+static char *signify(const char *file)
+{
+    char *t = slurp(file, NULL), *l2, *msg, *kname, *d, *kf = NULL, *kt = NULL, *kl, *ok = NULL;
+    unsigned char sig[96], pk[64];
+    if (!t || strncmp(t, "untrusted comment: ", 19) || !(l2 = strchr(t, '\n')) || !(msg = strchr(l2 + 1, '\n'))) { say("%s is not signed", file); goto out; }
+    *l2++ = 0;
+    *msg++ = 0;
+    kname = strrchr(t, '/') ? strrchr(t, '/') + 1 : strrchr(t, ' ') + 1;
+    d = confdir();
+    kf = fmt("%s/keys/%s", d, kname);
+    free(d);
+    if (!(kt = slurp(kf, NULL)) || !(kl = strchr(kt, '\n'))) say("%s is signed with %s, which is not there", file, kf);
+    else if (unbase64(kl + 1, pk) != 42 || unbase64(l2, sig) != 74 || memcmp(pk, "Ed", 2) || memcmp(sig, "Ed", 2) || memcmp(pk + 2, sig + 2, 8))
+        say("%s is not signed with %s", file, kf);
+    else if (!ed25519_ok(sig + 10, pk + 10, msg, strlen(msg))) say("the signature of %s does not match %s", file, kf);
+    else ok = xstrdup(msg);
+out:
+    free(t); free(kt); free(kf);
+    return ok;
+}
+
+static char *signed_sum(const char *msg, const char *file)
+{
+    char *want = fmt("SHA256 (%s) = ", file), *s, *v = NULL;
+    for (s = strstr(msg, want); s && !v; s = strstr(s + 1, want))
+        if (s == msg || s[-1] == '\n') v = xstrndup(s + strlen(want), strcspn(s + strlen(want), "\n"));
+    free(want);
+    return v;
+}
+
+static int has_line(const char *text, const char *line)
+{
+    size_t n = strlen(line);
+    const char *s;
+    for (s = text ? strstr(text, line) : NULL; s; s = strstr(s + 1, line))
+        if ((s == text || s[-1] == '\n') && (s[n] == '\n' || !s[n])) return 1;
+    return 0;
+}
+
+static char *trim(char *s)
+{
+    char *e;
+    while (*s == ' ' || *s == '\t' || *s == '"' || *s == '\'') s++;
+    for (e = s + strlen(s); e > s && strchr(" \t\"'", e[-1]); ) *--e = 0;
+    return s;
+}
+
+/* what the index needs of a Pkgfile: the comments on top and name, version and release */
+static void port_entry(struct buf *b, const char *dir, const char *port)
+{
+    char *f = fmt("%s/%s/Pkgfile", dir, port), *t = slurp(f, NULL), *line, *next, *ver = NULL, *rel = "1", *desc = "", *deps = "", *s, *e;
+    free(f);
+    if (!t) return;
+    for (line = t; line && *line; line = next) {
+        next = strchr(line, '\n');
+        if (next) *next++ = 0;
+        if (!strncmp(line, "# Description:", 14)) desc = trim(line + 14);
+        else if (!strncmp(line, "# Depends on:", 13)) deps = trim(line + 13);
+        else if (!strncmp(line, "version=", 8)) ver = trim(line + 8);
+        else if (!strncmp(line, "release=", 8)) rel = trim(line + 8);
+        else if (!strncmp(line, "build", 5)) break;
+    }
+    for (s = deps; *s; s++) if (*s == ',') *s = ' ';
+    if (ver && (e = strstr(ver, "${name}"))) { *e = 0; ver = fmt("%s%s%s", ver, port, e + 7); }
+    if (ver && !strchr(ver, '$')) {
+        s = fmt("P:%s\nV:%s-r%s\nT:%s\nD:%s\nk:-1\n\n", port, ver, rel, desc, deps);
+        buf_add(b, s, strlen(s));
+        free(s);
+    }
+    free(t);
+}
+
+/* gets the files of the tree REPO lists that changed since the last time, as httpup does, and indexes them. a file
+ * that does not come is left out of the REPO kept here, so the next update tries it again */
+static int sync_tree(int i)
+{
+    char *dir = tree_dir(i), *repo = fmt("%s/REPO", dir), *tmp = fmt("%s/REPO.new", dir), *url = fmt("%s/REPO", repo_urls.v[i]), *idx = fmt("%s/INDEX", dir);
+    char *old = NULL, *t = NULL, *line, *next, *dl = (char *)downloader();
+    struct list urls = { 0 }, files = { 0 }, keep = { 0 }, have = { 0 }, dirs = { 0 };
+    struct buf b = { 0 }, r = { 0 };
+    int bad = 0, k, lost = 0;
+    printf("==> %s\n", url);
+    mkpath(dir, 0755);
+    if (download(url, tmp)) { say("could not fetch %s", url); bad = 1; goto out; }
+    old = slurp(repo, NULL);
+    t = slurp(tmp, NULL);
+    for (line = t; line && *line; line = next) {
+        char *path, *c, *full, *base;
+        next = strchr(line, '\n');
+        if (next) *next++ = 0;
+        if (strncmp(line, "f:", 2) || !(path = strchr(line + 2, ':'))) continue;
+        path++;
+        if (!(base = strchr(path, '/'))) continue;
+        if (*++base == '.' && strcmp(base, ".signature") && strcmp(base, ".footprint")) continue;
+        c = clean(path);
+        if (!c || strcmp(c, path) || strpbrk(path, "\"\\'")) { say("%s has a bad path in it, %s", url, path); free(c); continue; }
+        push(&keep, c);
+        full = fmt("%s/%s", dir, path);
+        if (!exists(full) || !has_line(old, line)) { unlink(full); push(&urls, fmt("%s/%s", repo_urls.v[i], path)); push(&files, full); }
+        else free(full);
+    }
+    if (urls.n) printf("==> %d files\n", urls.n);
+    if (urls.n && !strncmp(dl, "curl ", 5) && !getenv("MAG_FETCH")) {
+        char *cfg = fmt("%s/fetch", dir), *cmd = xstrndup(dl, strlen(dl) - 3);
+        struct buf c = { 0 };
+        char *av[] = { "/bin/sh", "-c", "set -f; $0 --create-dirs --parallel --parallel-max 8 -K \"$1\"", cmd, cfg, NULL };
+        buf_add(&c, "", 0);
+        for (k = 0; k < urls.n; k++) {
+            char *s = fmt("url = \"%s\"\noutput = \"%s\"\n", urls.v[k], files.v[k]);
+            buf_add(&c, s, strlen(s));
+            free(s);
+        }
+        db_put_file(cfg, (char *)c.p);
+        run(av);
+        unlink(cfg);
+        free(cfg); free(cmd); free(c.p);
+    } else for (k = 0; k < urls.n; k++) download(urls.v[k], files.v[k]);
+    for (k = 0; k < files.n; k++) lost += !exists(files.v[k]);
+    if (lost) { say("%d files of %s did not come, mag update tries again", lost, repo_urls.v[i]); bad = 1; }
+    free(t);
+    t = slurp(tmp, NULL);
+    buf_add(&r, "", 0);
+    for (line = t; line && *line; line = next) {
+        char *path, *full;
+        next = strchr(line, '\n');
+        if (next) *next++ = 0;
+        if (!strncmp(line, "f:", 2) && (path = strchr(line + 2, ':'))) {
+            full = fmt("%s/%s", dir, path + 1);
+            k = exists(full);
+            free(full);
+            if (!k) continue;
+        }
+        buf_add(&r, line, strlen(line));
+        buf_add(&r, "\n", 1);
+    }
+    k = open(repo, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (k < 0 || write(k, r.p, r.n) != (ssize_t)r.n || close(k) < 0) die("cannot write %s: %s", repo, strerror(errno));
+    unlink(tmp);
+    walk(dir, "", &have, &dirs);
+    for (k = 0; k < have.n; k++)
+        if (!has(&keep, have.v[k]) && strcmp(have.v[k], "REPO") && strcmp(have.v[k], "REPO.new") && strcmp(have.v[k], "INDEX")) {
+            char *f = fmt("%s/%s", dir, have.v[k]);
+            unlink(f);
+            free(f);
+        }
+    buf_add(&b, "", 0);
+    free(t);
+    t = slurp(repo, NULL);
+    for (line = t; line && *line; line = next) {
+        char *pf;
+        next = strchr(line, '\n');
+        if (next) *next++ = 0;
+        if (strncmp(line, "d:", 2) || strchr(line + 2, '/')) continue;
+        pf = fmt("%s/Pkgfile", line + 2);
+        if (has(&keep, pf)) port_entry(&b, dir, line + 2);
+        free(pf);
+    }
+    db_put_file(idx, (char *)b.p);
+out:
+    list_free(&urls); list_free(&files); list_free(&keep); list_free(&have); list_free(&dirs);
+    free(b.p); free(r.p); free(old); free(t); free(dir); free(repo); free(tmp); free(url); free(idx);
+    return bad;
+}
+
+/* runs a shell script inside the root, with bash if it is there: Pkgfiles are written for it */
+static int shell(const char *text)
+{
+    static const char *const shs[] = { "/bin/bash", "/usr/bin/bash", "/bin/mksh", "/usr/bin/mksh" };
+    const char *sh = NULL;
+    pid_t pid;
+    int i;
+    for (i = 0; i < 4 && !sh; i++) { char *f = fmt("%s%s", root, shs[i]); if (exists(f)) sh = shs[i]; free(f); }
+    if (!sh) die("building a port needs bash, mag install bash");
+    fflush(stdout);
+    if ((pid = fork()) < 0) die("cannot fork");
+    if (!pid) {
+        if (*root && (chroot(root) < 0 || chdir("/") < 0)) { fprintf(stderr, "%s: chroot %s: %s\n", prog, root, strerror(errno)); _exit(126); }
+        setenv("PATH", "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin", 1);
+        execl(sh, sh, "-c", text, (char *)NULL);
+        _exit(127);
+    }
+    return wait_for(pid);
+}
+
+static const char *in_root(const char *path) { return path + strlen(root); }
+
+static int is_archive(const char *f)
+{
+    static const char *const ext[] = { ".tar", ".tar.gz", ".tgz", ".tar.bz2", ".tbz2", ".tar.xz", ".txz", ".tar.lz", ".tar.lzma", ".tar.zst", ".zip" };
+    size_t n = strlen(f);
+    int i;
+    for (i = 0; i < 11; i++) if (n > strlen(ext[i]) && !strcmp(f + n - strlen(ext[i]), ext[i])) return 1 + (i == 10);
+    return 0;
+}
+
+/* what pkgmk does: the sources, checked against the signed sums, unpacked into $SRC, then build() puts the package in $PKG */
+static void build_port(const struct pkg *p, const char *stage)
+{
+    char *tree = tree_dir(p->repo), *dir = fmt("%s/%s", tree, p->name), *sigf = fmt("%s/.signature", dir), *msg, *sum, *have;
+    char *work = fmt("%s/var/tmp/mag/build/%s", root, p->name), *src = fmt("%s/src", work), *list = fmt("%s/sources", work), *cache = fmt("%s/var/cache/mag/src", root);
+    char *s, *t, *line, *next;
+    struct list files = { 0 }, dirs = { 0 };
+    printf("==> building %s %s\n", p->name, p->ver);
+    if (!(msg = signify(sigf))) die("not building %s", p->name);
+    s = fmt("%s/Pkgfile", dir);
+    sum = signed_sum(msg, "Pkgfile");
+    have = sha256_file(s);
+    if (!sum || !have || strcmp(sum, have)) die("%s: the Pkgfile does not match its .signature", p->name);
+    free(s); free(sum); free(have);
+    rmtree(work);
+    rmtree(stage);
+    mkpath(src, 0755);
+    mkpath(stage, 0755);
+    mkpath(cache, 0755);
+    s = fmt("cd '%s' && . ./Pkgfile && for s in \"${source[@]}\"; do printf '%%s\\n' \"$s\"; done > '%s'", in_root(dir), in_root(list));
+    if (shell(s)) die("%s: cannot read the Pkgfile", p->name);
+    free(s);
+    t = slurp(list, NULL);
+    for (line = t; line && *line; line = next) {
+        char *base, *file, *cmd;
+        int remote = strstr(line, "://") != NULL, kind;
+        next = strchr(line, '\n');
+        if (next) *next++ = 0;
+        base = strrchr(line, '/') ? strrchr(line, '/') + 1 : line;
+        if (!*base || strpbrk(base, "'\\") || !strcmp(base, "..")) die("%s: a source with a bad name, %s", p->name, line);
+        file = remote ? fmt("%s/%s", cache, base) : fmt("%s/%s", dir, line);
+        if (!(sum = signed_sum(msg, base))) die("%s: %s is not in its .signature", p->name, base);
+        have = exists(file) ? sha256_file(file) : NULL;
+        if (remote && (!have || strcmp(have, sum))) {
+            printf("==> fetching %s\n", line);
+            free(have);
+            if (download(line, file)) die("could not fetch %s", line);
+            have = sha256_file(file);
+        }
+        if (!have || strcmp(have, sum)) die("%s: %s does not match its .signature", p->name, base);
+        kind = is_archive(base);
+        if (kind == 2) cmd = fmt("unzip -qo '%s' -d '%s'", in_root(file), in_root(src));
+        else if (kind) cmd = fmt("tar -C '%s' -xf '%s'", in_root(src), in_root(file));
+        else cmd = fmt("cp '%s' '%s/'", in_root(file), in_root(src));
+        if (shell(cmd)) die("%s: cannot unpack %s", p->name, base);
+        free(cmd); free(file); free(sum); free(have);
+    }
+    free(t);
+    s = fmt("set -e\n"
+            "[ -f /etc/mag/build.conf ] && . /etc/mag/build.conf\n"
+            "export CFLAGS=\"${CFLAGS:--O2 -pipe}\" CXXFLAGS=\"${CXXFLAGS:-${CFLAGS:--O2 -pipe}}\" MAKEFLAGS=\"${MAKEFLAGS:--j$(nproc)}\"\n"
+            "export PKG='%s' SRC='%s' PKGMK_ROOT='%s'\n"
+            "cd \"$PKGMK_ROOT\"\n"
+            ". ./Pkgfile\n"
+            "cd \"$SRC\"\n"
+            "(set -e -x; build)\n"
+            "cd \"$PKG\"\n"
+            "rm -f usr/share/info/dir\n"
+            "if command -v strip >/dev/null; then\n"
+            "  find . -type f \\( -perm -100 -o -name '*.so' -o -name '*.so.*' \\) -exec strip --strip-unneeded {} + 2>/dev/null || :\n"
+            "fi\n", in_root(stage), in_root(src), in_root(dir));
+    if (shell(s)) die("%s did not build, what it left is in %s", p->name, work);
+    free(s);
+    walk(stage, "", &files, &dirs);
+    if (!files.n) die("%s built nothing", p->name);
+    list_free(&files); list_free(&dirs);
+    rmtree(work);
+    free(tree); free(dir); free(sigf); free(msg); free(work); free(src); free(list); free(cache);
+}
+
 /* ---- installing a package ---- */
 
 static char *pkg_file(const struct pkg *p) { return fmt("%s/var/cache/mag/pkg/%s-%s.apk", root, p->name, p->ver); }
@@ -1549,14 +2101,19 @@ static void install_one(struct pkg *p, int explicit, const struct list *planned)
     char *file = pkg_file(p), *stage = fmt("%s/var/tmp/mag/%s", root, p->name), *oldver = db_get(p->name, "version"), *trig;
     struct list files = { 0 }, dirs = { 0 }, old, gone = { 0 }, deps = { 0 }, w, v = { 0 }, pr = { 0 };
     struct tar ctl;
-    int i, bad = 0;
-    int fresh = !exists(file);
-    if (fresh) fetch_pkg(p, file);
-    if (unpack(p, file, stage, &ctl)) {
-        unlink(file);
-        if (fresh) die("not installing %s", p->name);
-        fetch_pkg(p, file);
-        if (unpack(p, file, stage, &ctl)) { unlink(file); die("not installing %s", p->name); }
+    int i, bad = 0, port = kinds[p->repo] != APK;
+    if (port) {
+        memset(&ctl, 0, sizeof ctl);
+        build_port(p, stage);
+    } else {
+        int fresh = !exists(file);
+        if (fresh) fetch_pkg(p, file);
+        if (unpack(p, file, stage, &ctl)) {
+            unlink(file);
+            if (fresh) die("not installing %s", p->name);
+            fetch_pkg(p, file);
+            if (unpack(p, file, stage, &ctl)) { unlink(file); die("not installing %s", p->name); }
+        }
     }
     walk(stage, "", &files, &dirs);
     load_owners();
@@ -1582,6 +2139,12 @@ static void install_one(struct pkg *p, int explicit, const struct list *planned)
         if (e) db_put(p->name, scripts[i], (char *)e->data.p, e->data.n, 0755);
         else { char *d = dbdir(p->name), *f = fmt("%s/%s", d, scripts[i]); unlink(f); free(d); free(f); }
         free(n);
+    }
+    for (i = 0; port && i < 2; i++) {
+        char *d = tree_dir(p->repo), *f = fmt("%s/%s/%s", d, p->name, scripts[i]), *t;
+        size_t n;
+        if ((t = slurp(f, &n))) db_put(p->name, scripts[i], t, n, 0755);
+        free(d); free(f); free(t);
     }
     if (oldver) script_or_later(p->name, "pre-upgrade", p->ver, oldver);
     else script_or_later(p->name, "pre-install", p->ver, NULL);
@@ -1649,6 +2212,8 @@ static void install_one(struct pkg *p, int explicit, const struct list *planned)
     db_write(p->name, "files", &files);
     if ((trig = pkginfo(&ctl, "triggers"))) db_put(p->name, "triggers", trig, strlen(trig), 0644);
     if (explicit) db_put(p->name, "explicit", "", 0, 0644);
+    if (port) db_put(p->name, "port", repo_urls.v[p->repo], strlen(repo_urls.v[p->repo]), 0644);
+    else { char *d = dbdir(p->name), *f = fmt("%s/port", d); unlink(f); free(d); free(f); }
     free(trig);
     tar_free(&ctl);
     if (oldver) script_or_later(p->name, "post-upgrade", p->ver, oldver);
@@ -1662,12 +2227,22 @@ static void install_one(struct pkg *p, int explicit, const struct list *planned)
 
 static struct list wanted;
 
+static void plan(struct pkg *p, struct list *order, struct list *stack);
+
+/* a port is built with build-base, pkgconf and bash, which CRUX has in core, and the -dev of what it needs that comes built from a repo */
+static void plan_tool(const char *name, struct list *order, struct list *stack)
+{
+    struct pkg *q = newest(name);
+    if (q && !installed(name) && !has(order, name)) plan(q, order, stack);
+}
+
 static void plan(struct pkg *p, struct list *order, struct list *stack)
 {
     struct list w;
-    int i, j;
+    int i, j, port = kinds[p->repo] != APK;
     if (has(order, p->name) || has(stack, p->name)) return;
     push(stack, p->name);
+    if (port) { plan_tool("build-base", order, stack); plan_tool("pkgconf", order, stack); plan_tool("bash", order, stack); }
     w = words(p->deps);
     for (i = 0; i < w.n; i++) {
         struct dep d;
@@ -1679,13 +2254,20 @@ static void plan(struct pkg *p, struct list *order, struct list *stack)
             struct pkg *q = newest(order->v[j]);
             done = q && meets(&d, q->name, q->ver, q->prov);
         }
-        if (done || installed_for(&d)) continue;
-        for (j = 0, c = NULL; j < wanted.n && !c; j++) {
-            struct pkg *q = newest(wanted.v[j]);
-            if (q && meets(&d, q->name, q->ver, q->prov)) c = q;
+        if (!done && !installed_for(&d)) {
+            for (j = 0, c = NULL; j < wanted.n && !c; j++) {
+                struct pkg *q = newest(wanted.v[j]);
+                if (q && meets(&d, q->name, q->ver, q->prov)) c = q;
+            }
+            if (!c && !(c = pick(&d))) die("%s needs %s, which no repo has", p->name, w.v[i]);
+            plan(c, order, stack);
         }
-        if (!c && !(c = pick(&d))) die("%s needs %s, which no repo has", p->name, w.v[i]);
-        plan(c, order, stack);
+        if (port) {
+            struct pkg *q = newest(d.key);
+            char *dev = fmt("%s-dev", d.key), *m = dbdir(d.key), *f = fmt("%s/port", m);
+            if (q && kinds[q->repo] == APK && !exists(f)) plan_tool(dev, order, stack);
+            free(dev); free(m); free(f);
+        }
     }
     list_free(&w);
     stack->n--;
@@ -1697,7 +2279,7 @@ static int apply(const struct list *order, const struct list *want)
     int i;
     if (!order->n) return 0;
     printf("will install:");
-    for (i = 0; i < order->n; i++) printf(" %s", order->v[i]);
+    for (i = 0; i < order->n; i++) printf(" %s%s", order->v[i], kinds[newest(order->v[i])->repo] != APK ? " (built here)" : "");
     putchar('\n');
     if (dry) return 0;
     if (geteuid()) die("this needs root");
@@ -1749,6 +2331,7 @@ static int cmd_upgrade(void)
     struct list all = db_all(), order = { 0 }, stack = { 0 }, want = { 0 };
     int i;
     load_index();
+    for (i = 0; i < all.n; i++) { char *v = db_get(all.v[i], "port"); if (v) push(&from_ports, all.v[i]); free(v); }
     for (i = 0; i < all.n; i++) {
         struct pkg *p = newest(all.v[i]);
         char *v = db_get(all.v[i], "version"), *d = dbdir(all.v[i]), *e = fmt("%s/explicit", d);
@@ -1764,7 +2347,9 @@ static int cmd_update(void)
 {
     int i, bad = 0;
     for (i = 0; i < repo_urls.n; i++) {
-        char *base = repo_base(i), *url = fmt("%s/APKINDEX.tar.gz", base), *f = index_file(i), *tmp = fmt("%s.new", f);
+        char *base, *url, *f, *tmp;
+        if (kinds[i] != APK) { bad |= sync_tree(i); continue; }
+        base = repo_base(i); url = fmt("%s/APKINDEX.tar.gz", base); f = index_file(i); tmp = fmt("%s.new", f);
         printf("==> %s\n", url);
         if (download(url, tmp)) { say("could not fetch %s", url); bad = 1; }
         else if (check_signed(tmp)) { say("%s is not signed by a key mag has, not using it", url); unlink(tmp); bad = 1; }
@@ -1774,6 +2359,17 @@ static int cmd_update(void)
     load_index();
     printf("%d packages\n", npkgs);
     return bad;
+}
+
+static int cmd_build(int n, char **names)
+{
+    int i;
+    load_index();
+    for (i = 0; i < n; i++) {
+        if (!port_of(names[i])) die("%s is in no port tree", names[i]);
+        push(&from_ports, names[i]);
+    }
+    return cmd_install(n, names);
 }
 
 static int cmd_remove(int n, char **names)
@@ -1857,7 +2453,7 @@ static int cmd_info(const char *name)
         if (p->desc) printf("  %s\n", p->desc);
         if (p->deps) printf("  needs: %s\n", p->deps);
         if (p->size) printf("  size: %s bytes\n", p->size);
-        printf("  from: %s\n", repo_urls.v[p->repo]);
+        printf("  from: %s%s\n", kinds[p->repo] == CRUX ? "crux " : "", repo_urls.v[p->repo]);
     } else printf("%s\n", name);
     if (v) printf("  installed: %s\n", v); else puts("  not installed");
     free(v);
@@ -1925,6 +2521,7 @@ static int cmd_fetch(int n, char **names)
         struct pkg *p = newest(names[i]);
         char *file, *base, *url;
         if (!p) die("%s is in no repo", names[i]);
+        if (kinds[p->repo] != APK) { printf("%s comes from a port tree, it is built and not fetched\n", p->name); continue; }
         file = pkg_file(p); base = repo_base(p->repo); url = fmt("%s/%s-%s.apk", base, p->name, p->ver);
         printf("==> fetching %s\n", url);
         if (download(url, file)) die("could not fetch %s", url);
@@ -1939,6 +2536,7 @@ static void usage(void)
          "\n"
          "  update            get the index of every repo, checked against the keys\n"
          "  install PKG...    install packages and what they need\n"
+         "  build PKG...      build them from a port tree and install them, even if a repo has them built\n"
          "  remove PKG...     take a package off\n"
          "  upgrade           install what the repos have a newer version of\n"
          "  autoremove        remove what was only installed as a dependency and is not needed now\n"
@@ -1953,7 +2551,10 @@ static void usage(void)
          "  -n  only say what would happen    -f  go on when files clash or something needs the package\n"
          "\n"
          "/etc/mag/repos has one repo url a line, /etc/mag/keys the public keys they are signed with, /etc/mag/arch\n"
-         "which builds to get (written on the first install, the machine's own if it is not there).\n"
+         "which builds to get (written on the first install, the machine's own if it is not there). A line \"crux URL\" is a\n"
+         "CRUX port tree, like crux https://crux.nu/ports/crux-3.8/opt; its key, opt.pub, goes in /etc/mag/keys too. What a\n"
+         "repo has built wins over a port, mag build takes the port. Ports build with bash and the CFLAGS, CXXFLAGS and\n"
+         "MAKEFLAGS of /etc/mag/build.conf, if it is there.\n"
          "MAG_ROOT installs somewhere else than /, MAG_ARCH overrides the arch, MAG_FETCH is the download command, which gets a file and an url (curl, else wget, else ftp)");
 }
 
@@ -1982,6 +2583,7 @@ int main(int argc, char **argv)
             && strcmp(cmd, "rdeps") && strcmp(cmd, "autoremove")) load_repos();
         if (!strcmp(cmd, "update") && !n) rc = cmd_update();
         else if (!strcmp(cmd, "install") || !strcmp(cmd, "add")) rc = n ? cmd_install(n, a) : (say("install what?"), 1);
+        else if (!strcmp(cmd, "build")) rc = n ? cmd_build(n, a) : (say("build what?"), 1);
         else if (!strcmp(cmd, "remove") || !strcmp(cmd, "del")) rc = n ? cmd_remove(n, a) : (say("remove what?"), 1);
         else if (!strcmp(cmd, "upgrade") && !n) rc = cmd_upgrade();
         else if (!strcmp(cmd, "autoremove") && !n) rc = cmd_autoremove();
