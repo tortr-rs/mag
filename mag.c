@@ -2132,6 +2132,7 @@ static void install_one(struct pkg *p, int explicit, const struct list *planned)
     }
     if (bad > 5) say("and %d more", bad - 5);
     if (bad && !force) die("not installing %s, %d files are in the way, -f writes over them", p->name, bad);
+    bad = 0;
 
     for (i = 0; i < 7; i++) {
         char *n = fmt(".%s", scripts[i]);
