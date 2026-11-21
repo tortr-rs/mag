@@ -22,7 +22,7 @@
 #include <sys/wait.h>
 #endif
 
-#define VERSION "0.3"
+#define VERSION "0.4"
 
 static const char *prog = "mag";
 static const char *root = "";                   /* MAG_ROOT without the trailing slash, "" is / */
@@ -1049,7 +1049,8 @@ static struct prov *provs;
 static int nprovs;
 static struct list repo_urls;
 static int *kinds;
-enum { APK, CRUX };
+enum { APK, CRUX, VOID, EXHERBO };
+static const char *const kind_name[] = { "", "crux", "void", "exherbo" };
 
 static char *confdir(void)
 {
@@ -1082,6 +1083,7 @@ static void load_repos(void)
     if (!t) die("%s is missing: it lists the repos, one url a line", f);
     for (line = t; line && *line; line = next) {
         char *s;
+        int k;
         next = strchr(line, '\n');
         if (next) *next++ = 0;
         while (*line == ' ' || *line == '\t') line++;
@@ -1089,7 +1091,13 @@ static void load_repos(void)
         if (!*line || *line == '#') continue;
         kinds = xrealloc(kinds, (repo_urls.n + 1) * sizeof *kinds);
         kinds[repo_urls.n] = APK;
-        if (!strncmp(line, "crux", 4) && (line[4] == ' ' || line[4] == '\t')) for (kinds[repo_urls.n] = CRUX, line += 4; *line == ' ' || *line == '\t'; line++) {}
+        for (k = CRUX; k <= EXHERBO; k++) {
+            size_t n = strlen(kind_name[k]);
+            if (!strncmp(line, kind_name[k], n) && (line[n] == ' ' || line[n] == '\t')) {
+                for (kinds[repo_urls.n] = k, line += n; *line == ' ' || *line == '\t'; line++) {}
+                break;
+            }
+        }
         push(&repo_urls, xstrdup(line));
     }
     free(t); free(f); free(d);
@@ -2024,6 +2032,793 @@ static void build_port(const struct pkg *p, const char *stage)
     free(tree); free(dir); free(sigf); free(msg); free(work); free(src); free(list); free(cache);
 }
 
+/* ---- Void's srcpkgs and Exherbo's exheres: a git tree, fetched whole, built with the tree's own helpers ---- */
+
+static int match(const char *p, const char *s)
+{
+    if (*p == '*') return match(p + 1, s) || (*s && match(p, s + 1));
+    if (!*p) return !*s;
+    return *s && (*p == '?' || *p == *s) && match(p + 1, s + 1);
+}
+
+struct var { char *k, *v; };
+
+static const char *var_get(const struct var *vs, int n, const char *k)
+{
+    while (n--) if (!strcmp(vs[n].k, k)) return vs[n].v;
+    return NULL;
+}
+
+/* $x and ${x} of the variables set above it; anything harder stays as it is */
+static char *expand(const char *v, const struct var *vs, int n)
+{
+    struct buf b = { 0 };
+    buf_add(&b, "", 0);
+    while (*v) {
+        if (*v == '$') {
+            const char *s = v + 1 + (v[1] == '{'), *e, *val;
+            char *k;
+            for (e = s; isalnum((unsigned char)*e) || *e == '_'; e++) {}
+            if (e > s && (v[1] != '{' || *e == '}')) {
+                k = xstrndup(s, e - s);
+                val = var_get(vs, n, k);
+                free(k);
+                if (val) { buf_add(&b, val, strlen(val)); v = e + (v[1] == '{'); continue; }
+            }
+        }
+        buf_add(&b, v++, 1);
+    }
+    return (char *)b.p;
+}
+
+/* the variables a recipe sets at the top level, outside its functions, ifs and cases */
+static int top_vars(char *t, struct var **out)
+{
+    struct var *vs = NULL;
+    int n = 0, infn = 0, j;
+    char *line, *next, *s;
+    for (s = t; (s = strstr(s, "\\\n")); ) s[0] = s[1] = ' ';
+    for (line = t; line && *line; line = next) {
+        char *k, *v, *val;
+        int add;
+        size_t l;
+        next = strchr(line, '\n');
+        if (next) *next++ = 0;
+        l = strlen(line);
+        if (infn) { infn = *line != '}'; continue; }
+        if (!isspace((unsigned char)*line) && strstr(line, "()") && l && line[l - 1] == '{') { infn = 1; continue; }
+        if (!strncmp(line, "require ", 8)) { vs = xrealloc(vs, (n + 1) * sizeof *vs); vs[n].k = xstrdup("require"); vs[n++].v = xstrdup(line + 8); continue; }
+        for (k = line; isalnum((unsigned char)*k) || *k == '_'; k++) {}
+        if (k == line || (*k != '=' && (k[0] != '+' || k[1] != '='))) continue;
+        add = *k == '+';
+        *k = 0;
+        v = k + 1 + add;
+        if (*v == '"' || *v == '\'') {
+            char q = *v++, *e;
+            for (;;) {
+                for (e = v; *e && (*e != q || (q == '"' && e > v && e[-1] == '\\')); e++) {}
+                if (*e || !next) { *e = 0; break; }
+                next[-1] = '\n';
+                e = strchr(next, '\n');
+                next = e ? (*e = 0, e + 1) : NULL;
+            }
+        } else v[strcspn(v, " \t#;")] = 0;
+        val = expand(v, vs, n);
+        for (j = n - 1; j >= 0 && strcmp(vs[j].k, line); j--) {}
+        if (j >= 0 && add) { char *s = fmt("%s%s", vs[j].v, val); free(vs[j].v); free(val); vs[j].v = s; }
+        else if (j >= 0) { free(vs[j].v); vs[j].v = val; }
+        else { vs = xrealloc(vs, (n + 1) * sizeof *vs); vs[n].k = xstrdup(line); vs[n++].v = val; }
+    }
+    *out = vs;
+    return n;
+}
+
+static void vars_free(struct var *vs, int n)
+{
+    while (n--) { free(vs[n].k); free(vs[n].v); }
+    free(vs);
+}
+
+static void entry(struct buf *b, const char *name, const char *ver, const char *desc, const char *deps, const char *prov, const char *path)
+{
+    char *s = fmt("P:%s\nV:%s\nT:%s\nD:%s\np:%s\nC:%s\nk:-1\n\n", name, ver, desc ? desc : "", deps, prov ? prov : "", path ? path : "");
+    char *c;
+    for (c = s; *c; c++) if (*c == '\t') *c = ' ';
+    buf_add(b, s, strlen(s));
+    free(s);
+}
+
+static void void_deps(struct buf *d, const char *s)
+{
+    struct list w = words(s);
+    int i;
+    for (i = 0; i < w.n; i++) {
+        char *n = w.v[i], *dash;
+        if (!strncmp(n, "virtual?", 8)) n += 8;
+        n[strcspn(n, "<>=")] = 0;
+        if ((dash = strrchr(n, '-')) && strchr(dash, '_') && isdigit((unsigned char)dash[1])) *dash = 0;
+        if (*n && !strchr(n, '$')) { buf_add(d, " ", 1); buf_add(d, n, strlen(n)); }
+        if (!strcmp(n, "automake") || !strcmp(n, "libtool")) buf_add(d, " autoconf", 9);
+    }
+    list_free(&w);
+}
+
+static int void_arch_ok(const char *archs)
+{
+    const char *m = !strcmp(arch, "x86") ? "i686-musl" : !strcmp(arch, "x86_64") ? "x86_64-musl" : arch;
+    struct list w = words(archs);
+    int i, pos = 0, in = 0, out = 0;
+    for (i = 0; i < w.n; i++) {
+        if (*w.v[i] == '~') out |= match(w.v[i] + 1, m);
+        else { pos = 1; in |= match(w.v[i], m); }
+    }
+    list_free(&w);
+    return !out && (!pos || in);
+}
+
+static void void_entry(struct buf *b, const char *dir, const char *name, const char *prov)
+{
+    static const char *const tools[][2] = { { "cmake", "cmake" }, { "meson", "meson" }, { "perl-module", "perl" }, { "cargo", "cargo" }, { "go", "go" },
+                                            { "python3-module", "python3 py3-setuptools" }, { "python3-pep517", "python3 py3-build py3-installer" } };
+    char *f = fmt("%s/srcpkgs/%s/template", dir, name), *t = slurp(f, NULL), *ver;
+    const char *v, *r, *a, *bs;
+    struct var *vs;
+    struct buf d = { 0 };
+    int n, i;
+    free(f);
+    if (!t) return;
+    n = top_vars(t, &vs);
+    v = var_get(vs, n, "version");
+    r = var_get(vs, n, "revision");
+    a = var_get(vs, n, "archs");
+    if (v && !strchr(v, '$') && !var_get(vs, n, "broken") && !(a && strcmp(a, "noarch") && !void_arch_ok(a))) {
+        buf_add(&d, "", 0);
+        void_deps(&d, var_get(vs, n, "hostmakedepends") ? var_get(vs, n, "hostmakedepends") : "");
+        void_deps(&d, var_get(vs, n, "makedepends") ? var_get(vs, n, "makedepends") : "");
+        void_deps(&d, var_get(vs, n, "depends") ? var_get(vs, n, "depends") : "");
+        if ((bs = var_get(vs, n, "build_style")))
+            for (i = 0; i < 7; i++) if (!strcmp(bs, tools[i][0])) { buf_add(&d, " ", 1); buf_add(&d, tools[i][1], strlen(tools[i][1])); }
+        ver = fmt("%s-r%s", v, r ? r : "1");
+        entry(b, name, ver, var_get(vs, n, "short_desc"), (char *)d.p + (d.n > 0), prov, NULL);
+        free(ver);
+        free(d.p);
+    }
+    vars_free(vs, n);
+    free(t);
+}
+
+static void void_index(struct buf *b, const char *dir)
+{
+    char *sp = fmt("%s/srcpkgs", dir);
+    struct list names = { 0 }, subs = { 0 }, mains = { 0 };
+    DIR *d = opendir(sp);
+    struct dirent *e;
+    int i, j;
+    while (d && (e = readdir(d))) if (e->d_name[0] != '.') push(&names, xstrdup(e->d_name));
+    if (d) closedir(d);
+    if (names.n) qsort(names.v, names.n, sizeof *names.v, cmp_str);
+    for (i = 0; i < names.n; i++) {
+        char *f = fmt("%s/%s", sp, names.v[i]), to[256];
+        ssize_t k = readlink(f, to, sizeof to - 1);
+        if (k > 0) { to[k] = 0; push(&subs, xstrdup(names.v[i])); push(&mains, xstrdup(to)); }
+        free(f);
+    }
+    for (i = 0; i < names.n; i++) {
+        struct buf p = { 0 };
+        if (has(&subs, names.v[i])) continue;
+        buf_add(&p, "", 0);
+        for (j = 0; j < subs.n; j++) if (!strcmp(mains.v[j], names.v[i])) { if (p.n) buf_add(&p, " ", 1); buf_add(&p, subs.v[j], strlen(subs.v[j])); }
+        void_entry(b, dir, names.v[i], (char *)p.p);
+        free(p.p);
+    }
+    list_free(&names); list_free(&subs); list_free(&mains);
+    free(sp);
+}
+
+/* the build and run dependencies of an exheres, without what an option turns on: those are off here */
+static void exherbo_deps(struct buf *d, const char *s)
+{
+    struct list w = words(s);
+    int i, ann = 0, use = 1, off = 0, depth = 0, offat = 0;
+    for (i = 0; i < w.n; i++) {
+        char *t = w.v[i], *n;
+        size_t l = strlen(t);
+        if (!strncmp(t, "[[", 2)) { ann++; continue; }
+        if (ann) { if (!strcmp(t, "]]")) ann--; continue; }
+        if (!strcmp(t, "(")) { depth++; continue; }
+        if (!strcmp(t, ")")) { if (off && depth == offat) off = 0; depth--; continue; }
+        if (l > 1 && t[l - 1] == '?') { if (!off) { off = 1; offat = depth + 1; } continue; }
+        if (l > 1 && t[l - 1] == ':' && !strchr(t, '/')) { t[l - 1] = 0; use = !strcmp(t, "build") || !strcmp(t, "run") || !strcmp(t, "build+run"); continue; }
+        if (!use || off || *t == '!' || !(n = strrchr(t, '/'))) continue;
+        n++;
+        n[strcspn(n, "[:")] = 0;
+        if (*n && !strchr(n, '$')) { buf_add(d, " ", 1); buf_add(d, n, strlen(n)); }
+    }
+    list_free(&w);
+}
+
+static void exherbo_entry(struct buf *b, const char *dir, const char *rel, const char *pn, const char *file)
+{
+    char *f = fmt("%s/%s", dir, rel), *t = slurp(f, NULL), *ver = xstrndup(file + strlen(pn) + 1, strlen(file) - strlen(pn) - 1 - 10);
+    const char *pl, *rq, *plat = !strcmp(arch, "x86") ? "x86" : "amd64";
+    struct var *vs;
+    struct buf d = { 0 };
+    int n, ok = 1;
+    free(f);
+    if (!t || strstr(ver, "scm")) { free(t); free(ver); return; }
+    n = top_vars(t, &vs);
+    if ((pl = var_get(vs, n, "PLATFORMS"))) {
+        struct list w = words(pl);
+        int i;
+        for (i = 0, ok = 0; i < w.n; i++) ok |= !strcmp(w.v[i] + (*w.v[i] == '~'), plat);
+        list_free(&w);
+    }
+    if (ok) {
+        buf_add(&d, "", 0);
+        exherbo_deps(&d, var_get(vs, n, "DEPENDENCIES") ? var_get(vs, n, "DEPENDENCIES") : "");
+        if ((rq = var_get(vs, n, "require"))) {
+            if (strstr(rq, "autotools")) buf_add(&d, " autoconf automake libtool", 26);
+            if (strstr(rq, "cmake")) buf_add(&d, " cmake", 6);
+            if (strstr(rq, "meson")) buf_add(&d, " meson", 6);
+        }
+        entry(b, pn, ver, var_get(vs, n, "SUMMARY"), (char *)d.p + (d.n > 0), NULL, rel);
+        free(d.p);
+    }
+    vars_free(vs, n);
+    free(t);
+    free(ver);
+}
+
+static void exherbo_index(struct buf *b, const char *dir)
+{
+    char *pd = fmt("%s/packages", dir);
+    struct list cats = { 0 };
+    DIR *d = opendir(pd), *d2, *d3;
+    struct dirent *e;
+    int i;
+    while (d && (e = readdir(d))) if (e->d_name[0] != '.') push(&cats, xstrdup(e->d_name));
+    if (d) closedir(d);
+    for (i = 0; i < cats.n; i++) {
+        char *cd = fmt("%s/%s", pd, cats.v[i]);
+        if ((d2 = opendir(cd))) {
+            while ((e = readdir(d2))) {
+                char *pn = xstrdup(e->d_name), *dd = fmt("%s/%s", cd, pn);
+                struct dirent *e3;
+                if (*pn != '.' && (d3 = opendir(dd))) {
+                    while ((e3 = readdir(d3))) {
+                        size_t l = strlen(e3->d_name);
+                        if (l > strlen(pn) + 11 && !strncmp(e3->d_name, pn, strlen(pn)) && e3->d_name[strlen(pn)] == '-' && !strcmp(e3->d_name + l - 10, ".exheres-0")) {
+                            char *rel = fmt("packages/%s/%s/%s", cats.v[i], pn, e3->d_name);
+                            exherbo_entry(b, dir, rel, pn, e3->d_name);
+                            free(rel);
+                        }
+                    }
+                    closedir(d3);
+                }
+                free(pn); free(dd);
+            }
+            closedir(d2);
+        }
+        free(cd);
+    }
+    list_free(&cats);
+    free(pd);
+}
+
+/* github and gitlab give a tarball of a branch; a line can also be the tarball itself */
+static char *archive_url(const char *u)
+{
+    size_t n = strlen(u);
+    const char *b = strrchr(u, '/');
+    if ((n > 7 && !strcmp(u + n - 7, ".tar.gz")) || (n > 4 && !strcmp(u + n - 4, ".tgz"))) return xstrdup(u);
+    if (strstr(u, "://github.com/")) return fmt("%s/archive/refs/heads/master.tar.gz", u);
+    return fmt("%s/-/archive/master/%s-master.tar.gz", u, b ? b + 1 : u);
+}
+
+static int sync_archive(int i)
+{
+    char *dir = tree_dir(i), *url = archive_url(repo_urls.v[i]), *tgz = fmt("%s/tree.tar.gz", dir), *tmp = fmt("%s/new", dir), *tree = fmt("%s/tree", dir), *idx = fmt("%s/INDEX", dir), *top = NULL;
+    struct in *r = xmalloc(sizeof *r);
+    struct tar t;
+    struct buf b = { 0 };
+    DIR *d;
+    struct dirent *e;
+    int fd, bad = 0;
+    printf("==> %s\n", url);
+    mkpath(dir, 0755);
+    if (download(url, tgz)) { say("could not fetch %s", url); bad = 1; goto out; }
+    rmtree(tmp);
+    mkpath(tmp, 0755);
+    memset(&t, 0, sizeof t);
+    t.dir = tmp;
+    if ((fd = open(tgz, O_RDONLY)) < 0) die("cannot read %s", tgz);
+    in_open(r, fd, 0);
+    do {
+        if (gunzip(r, tar_out, &t) || t.bad) { bad = 1; break; }
+    } while (!in_eof(r));
+    tar_free(&t);
+    close(fd);
+    unlink(tgz);
+    if (!bad && (d = opendir(tmp))) {
+        while ((e = readdir(d))) if (e->d_name[0] != '.') { if (top) bad = 1; else top = fmt("%s/%s", tmp, e->d_name); }
+        closedir(d);
+    }
+    if (bad || !top) { say("%s did not unpack into one directory", url); bad = 1; goto out; }
+    rmtree(tree);
+    if (rename(top, tree) < 0) die("cannot rename %s: %s", top, strerror(errno));
+    buf_add(&b, "", 0);
+    if (kinds[i] == VOID) void_index(&b, tree); else exherbo_index(&b, tree);
+    db_put_file(idx, (char *)b.p);
+out:
+    rmtree(tmp);
+    free(r); free(b.p); free(dir); free(url); free(tgz); free(tmp); free(tree); free(idx); free(top);
+    return bad;
+}
+
+static const char void_sh[] =
+    "export XBPS_COMMONDIR=$MAG_TREE/common XBPS_SRCPKGDIR=$MAG_TREE/srcpkgs XBPS_BUILDSTYLEDIR=$MAG_TREE/common/build-style\n"
+    "case $MAG_ARCH in x86) XBPS_MACHINE=i686-musl XBPS_WORDSIZE=32 ;; *) XBPS_MACHINE=$MAG_ARCH-musl XBPS_WORDSIZE=64 ;; esac\n"
+    "export XBPS_MACHINE XBPS_TARGET_MACHINE=$XBPS_MACHINE XBPS_TARGET_LIBC=musl XBPS_WORDSIZE XBPS_TARGET_WORDSIZE=\n"
+    "export XBPS_BUILDDIR=$MAG_WORK XBPS_SRCDISTDIR=$MAG_SRC XBPS_STATEDIR=$MAG_WORK/.xbps XBPS_MAKEJOBS=$(nproc)\n"
+    ". $XBPS_COMMONDIR/build-profiles/$XBPS_MACHINE.sh\n"
+    "export XBPS_TRIPLET XBPS_CROSS_TRIPLET= CROSS_BUILD=\n"
+    "msg_normal() { printf '==> %b' \"$*\"; }\n"
+    "msg_warn() { printf 'warning: %b' \"$*\" >&2; }\n"
+    "msg_red() { msg_warn \"$@\"; }\n"
+    "msg_verbose() { :; }\n"
+    "msg_error() { printf '%b' \"$*\" >&2; exit 1; }\n"
+    "for f in archive install misc options python replace-interpreter vsed; do . $XBPS_COMMONDIR/environment/setup/$f.sh; done\n"
+    ". $XBPS_SRCPKGDIR/$MAG_PORT/template\n"
+    "for f in $build_options_default; do eval \"build_option_$f=1\"; done\n"
+    "if [ -n \"$build_style\" ]; then\n"
+    "    [ ! -r $XBPS_COMMONDIR/environment/build-style/$build_style.sh ] || . $XBPS_COMMONDIR/environment/build-style/$build_style.sh\n"
+    "    . $XBPS_BUILDSTYLEDIR/$build_style.sh\n"
+    "fi\n"
+    ". $XBPS_SRCPKGDIR/$MAG_PORT/template\n"
+    "sourcepkg=$pkgname pkgver=$pkgname-${version}_$revision\n"
+    "wrksrc=$XBPS_BUILDDIR/$pkgname-$version\n"
+    "FILESDIR=$XBPS_SRCPKGDIR/$pkgname/files PATCHESDIR=$XBPS_SRCPKGDIR/$pkgname/patches\n"
+    "export XBPS_WRAPPERDIR=$XBPS_STATEDIR/wrappers XBPS_BUILDHELPERDIR=$XBPS_COMMONDIR/build-helper\n"
+    "if [ \"$MAG_STEP\" = list ]; then\n"
+    "    exec > \"$MAG_OUT\"\n"
+    "    set -- $checksum\n"
+    "    for f in $distfiles; do\n"
+    "        c=${f#*>} c=${c##*/}\n"
+    "        printf '%s\\t%s/%s\\t%s\\n' \"${f%>*}\" \"$pkgname-$version\" \"$c\" \"$1\"\n"
+    "        shift\n"
+    "    done\n"
+    "    exit 0\n"
+    "fi\n"
+    "[ -z \"$broken\" ] || msg_error \"$pkgver is broken in Void: $broken\\n\"\n"
+    "[ -f /etc/mag/build.conf ] && . /etc/mag/build.conf\n"
+    "export CFLAGS=\"${CFLAGS:--O2 -pipe}\" CXXFLAGS=\"${CXXFLAGS:-${CFLAGS:--O2 -pipe}}\" LDFLAGS\n"
+    "export CC=cc CXX=c++ CPP=cpp LD=ld AR=ar AS=as RANLIB=ranlib STRIP=strip NM=nm OBJDUMP=objdump OBJCOPY=objcopy READELF=readelf PKG_CONFIG=pkg-config\n"
+    "[ -z \"$disable_parallel_build\" ] || XBPS_MAKEJOBS=1\n"
+    "makejobs=-j$XBPS_MAKEJOBS DESTDIR=$MAG_DEST PKGDESTDIR=$MAG_DEST\n"
+    "mkdir -p \"$XBPS_STATEDIR\" \"$XBPS_WRAPPERDIR\" \"$DESTDIR\" || exit 1\n"
+    "for f in $build_helper; do . $XBPS_BUILDHELPERDIR/$f.sh || exit 1; done\n"
+    "cd_wrksrc() { if [ -d \"$wrksrc/$build_wrksrc\" ]; then cd \"$wrksrc/$build_wrksrc\"; elif [ -d \"$wrksrc\" ]; then cd \"$wrksrc\"; fi; }\n"
+    "run() { (set -E -x; trap 'exit 1' ERR; \"$@\") || msg_error \"$pkgver: $1 failed\\n\"; }\n"
+    "hooks() { local f; for f in \"$@\"; do [ -r $XBPS_COMMONDIR/hooks/$f.sh ] || continue; unset -f hook; . $XBPS_COMMONDIR/hooks/$f.sh; cd_wrksrc; run hook; done; }\n"
+    "step() {\n"
+    "    local s=$1\n"
+    "    shift\n"
+    "    cd_wrksrc\n"
+    "    hooks $(for h in \"$@\"; do echo pre-$s/$h; done)\n"
+    "    if declare -f pre_$s >/dev/null; then cd_wrksrc; run pre_$s; fi\n"
+    "    cd_wrksrc\n"
+    "    if declare -f do_$s >/dev/null; then run do_$s\n"
+    "    else hooks do-$s/00-distfiles do-$s/00-patches\n"
+    "    fi\n"
+    "    if declare -f post_$s >/dev/null; then cd_wrksrc; run post_$s; fi\n"
+    "}\n"
+    "mkdir -p \"$wrksrc\"\n"
+    "step extract\n"
+    "step patch\n"
+    ". $XBPS_COMMONDIR/environment/configure/gnu-configure-args.sh\n"
+    "step configure 01-override-config\n"
+    "step build\n"
+    "step install\n"
+    "cd \"$DESTDIR\" || exit 1\n"
+    "if [ -d usr/lib64 ] && [ ! -L usr/lib64 ]; then mkdir -p usr/lib; cp -a usr/lib64/. usr/lib/; rm -rf usr/lib64; fi\n"
+    "find . -name '*.la' -delete\n"
+    "rm -f usr/share/info/dir\n"
+    "if command -v strip >/dev/null; then\n"
+    "    find . -type f \\( -perm -100 -o -name '*.so' -o -name '*.so.*' \\) -exec strip --strip-unneeded {} + 2>/dev/null || :\n"
+    "fi\n"
+    "find . -depth -type d -empty -delete\n";
+
+
+static const char exherbo_sh[] =
+    "shopt -s extglob\n"
+    "die() { echo \"${PNV:-mag}: $*\" >&2; exit 1; }\n"
+    "nonfatal() { \"$@\"; }\n"
+    "edo() { echo \"$*\" >&2; \"$@\" || die \"$* failed\"; }\n"
+    "einfo() { echo \" * $*\"; }\n"
+    "elog() { einfo \"$@\"; }\n"
+    "ewarn() { echo \" * $*\" >&2; }\n"
+    "eerror() { ewarn \"$@\"; }\n"
+    "ebegin() { einfo \"$@\"; }\n"
+    "eend() { return ${1:-0}; }\n"
+    "has() { local x=$1 i; shift; for i in \"$@\"; do [[ $i == \"$x\" ]] && return 0; done; return 1; }\n"
+    "hasq() { has \"$@\"; }\n"
+    "illegal_in_global_scope() { :; }\n"
+    "esandbox() { :; }\n"
+    "expecting_tests() { false; }\n"
+    "CHOST=$(cc -dumpmachine)\n"
+    "exhost() {\n"
+    "    case $1 in\n"
+    "    --target|--host|--build) echo \"$CHOST\" ;;\n"
+    "    --tool-prefix) echo ;;\n"
+    "    --is-native) return 0 ;;\n"
+    "    *) echo \"$CHOST\" ;;\n"
+    "    esac\n"
+    "}\n"
+    "has_version() { local p=${1##*/}; p=${p%%[:\\[]*}; [[ -d /var/lib/mag/$p ]]; }\n"
+    "best_version() { local p=${1##*/}; p=${p%%[:\\[]*}; [[ -f /var/lib/mag/$p/version ]] && echo \"$1-$(cat /var/lib/mag/$p/version)\"; }\n"
+    "\n"
+    "vcmp() {\n"
+    "    local IFS=._- a b i x y\n"
+    "    a=($1) b=($2)\n"
+    "    for ((i = 0; i < ${#a[@]} || i < ${#b[@]}; i++)); do\n"
+    "        x=${a[i]:-0} y=${b[i]:-0}\n"
+    "        [[ $x == \"$y\" ]] && continue\n"
+    "        if [[ $x =~ ^[0-9]+$ && $y =~ ^[0-9]+$ ]]; then (( 10#$x > 10#$y )); return; fi\n"
+    "        [[ $x > $y ]]; return\n"
+    "    done\n"
+    "    return 1\n"
+    "}\n"
+    "ever() {\n"
+    "    local c=$1 v\n"
+    "    shift\n"
+    "    case $c in\n"
+    "    is_scm) v=${1:-$PV}; [[ $v == scm || $v == *-scm ]] ;;\n"
+    "    major) v=${1:-$PV}; echo \"${v%%[._-]*}\" ;;\n"
+    "    range)\n"
+    "        local a=${1%-*} b=${1#*-} i=1 out= p\n"
+    "        [[ $1 == *-* ]] || b=$a\n"
+    "        [[ -z $b ]] && b=99\n"
+    "        v=${2:-$PV}\n"
+    "        for p in ${v//[._-]/ }; do\n"
+    "            if (( i >= a && i <= b )); then out+=${out:+.}$p; fi\n"
+    "            ((i++))\n"
+    "        done\n"
+    "        echo \"$out\" ;;\n"
+    "    at_least) v=${2:-$PV}; [[ $v == \"$1\" ]] || vcmp \"$v\" \"$1\" ;;\n"
+    "    replace) v=${3:-$PV}; local n=$1 r=$2 i=0 out= ch; for ((k=0; k<${#v}; k++)); do ch=${v:k:1}; if [[ $ch == [._-] ]]; then ((++i)); [[ $i == \"$n\" ]] && ch=$r; fi; out+=$ch; done; echo \"$out\" ;;\n"
+    "    replace_all) v=${2:-$PV}; echo \"${v//[._-]/$1}\" ;;\n"
+    "    delete) ever replace \"$1\" '' \"${2:-$PV}\" ;;\n"
+    "    delete_all) v=${1:-$PV}; echo \"${v//[._-]/}\" ;;\n"
+    "    split) v=${1:-$PV}; echo \"${v//[._-]/ }\" ;;\n"
+    "    split_all) v=${1:-$PV}; echo \"${v//[._-]/ }\" ;;\n"
+    "    remainder) v=${1:-$PV}; echo \"${v#*[._-]}\" ;;\n"
+    "    *) die \"ever $c is not known here\" ;;\n"
+    "    esac\n"
+    "}\n"
+    "\n"
+    "declare -A EXP\n"
+    "exlib_of() { local f=${BASH_SOURCE[2]##*/}; echo \"${f%.exlib}\"; }\n"
+    "myexparam() {\n"
+    "    local b= x=$(exlib_of) k v\n"
+    "    [[ $1 == -b ]] && shift\n"
+    "    k=${1%%=*} v=${1#*=}\n"
+    "    [[ $1 == *=* ]] || v=\n"
+    "    if [[ $v == '[' ]]; then\n"
+    "        shift; v=\n"
+    "        while [[ $# -gt 0 && $1 != ']' ]]; do v+=${v:+ }$1; shift; done\n"
+    "    fi\n"
+    "    k=${k%\\[\\]}\n"
+    "    [[ -v EXP[$x:$k] ]] || EXP[$x:$k]=$v\n"
+    "}\n"
+    "exparam() {\n"
+    "    local b= var= x=$(exlib_of) k\n"
+    "    [[ $1 == -b ]] && { b=1; shift; }\n"
+    "    [[ $1 == -v ]] && { var=$2; shift 2; }\n"
+    "    k=${1%\\[@\\]}\n"
+    "    if [[ -n $b ]]; then [[ ${EXP[$x:$k]} == true ]]; return; fi\n"
+    "    if [[ -n $var ]]; then\n"
+    "        if [[ $1 == *'[@]' ]]; then eval \"$var=(${EXP[$x:$k]})\"; else printf -v \"$var\" '%s' \"${EXP[$x:$k]}\"; fi\n"
+    "    else echo \"${EXP[$x:$k]}\"\n"
+    "    fi\n"
+    "}\n"
+    "declare -A LOADED\n"
+    "require() {\n"
+    "    local name f d k v\n"
+    "    while [[ $# -gt 0 ]]; do\n"
+    "        name=$1; shift\n"
+    "        if [[ $1 == '[' ]]; then\n"
+    "            shift\n"
+    "            while [[ $# -gt 0 && $1 != ']' ]]; do\n"
+    "                k=${1%%=*} v=${1#*=}\n"
+    "                shift\n"
+    "                if [[ $v == '[' ]]; then\n"
+    "                    v=\n"
+    "                    while [[ $1 != ']' ]]; do v+=${v:+ }$1; shift; done\n"
+    "                    shift\n"
+    "                fi\n"
+    "                EXP[$name:$k]=$v\n"
+    "            done\n"
+    "            shift\n"
+    "        fi\n"
+    "        [[ -n ${LOADED[$name]} ]] && continue\n"
+    "        LOADED[$name]=1\n"
+    "        f=\n"
+    "        for d in \"$PKGDIR\" \"$MAG_TREE/packages/$CATEGORY\" \"$MAG_TREE/exlibs\"; do\n"
+    "            [[ -f $d/$name.exlib ]] && { f=$d/$name.exlib; break; }\n"
+    "        done\n"
+    "        [[ -n $f ]] || die \"no exlib $name\"\n"
+    "        source \"$f\"\n"
+    "    done\n"
+    "}\n"
+    "export_exlib_phases() {\n"
+    "    local x=$(exlib_of) p\n"
+    "    for p in \"$@\"; do eval \"$p() { ${x}_$p \\\"\\$@\\\"; }\"; done\n"
+    "}\n"
+    "\n"
+    "declare -A OPT\n"
+    "for o in ncurses truetype crypt openssl ssl bash-completion vim-syntax parts:binaries parts:configuration parts:data parts:development parts:documentation parts:libraries libc:musl providers:eudev providers:openssl providers:libressl providers:elfutils providers:ijg-jpeg providers:jpeg-turbo providers:gtk3 providers:qt5 providers:pkgconf; do OPT[$o]=1; done\n"
+    "case $MAG_ARCH in x86) OPT[platform:x86]=1 ;; *) OPT[platform:amd64]=1 ;; esac\n"
+    "option() { local o=$1; [[ $o == '!'* ]] && { ! option \"${o#!}\"; return; }; [[ -n ${OPT[$o]} ]]; }\n"
+    "optionq() { option \"$@\"; }\n"
+    "optionv() { option \"$1\" && echo \"${1##*:}\"; }\n"
+    "option_enable() {\n"
+    "    set -- $*\n"
+    "    local o=$1 f=${2:-${1##*:}} v=$3\n"
+    "    if option \"$o\"; then echo \"--enable-$f${v:+=$v}\"; else echo \"--disable-$f\"; fi\n"
+    "}\n"
+    "option_with() {\n"
+    "    set -- $*\n"
+    "    local o=$1 f=${2:-${1##*:}} v=$3\n"
+    "    if option \"$o\"; then echo \"--with-$f${v:+=$v}\"; else echo \"--without-$f\"; fi\n"
+    "}\n"
+    "\n"
+    "into() { DESTTREE=$1; }\n"
+    "insinto() { INSDESTTREE=$1; }\n"
+    "exeinto() { EXEDESTTREE=$1; }\n"
+    "docinto() { DOCDESTTREE=$1; }\n"
+    "insopts() { :; }\n"
+    "exeopts() { :; }\n"
+    "dodir() { local d; for d; do mkdir -p \"$IMAGE/$d\"; done; }\n"
+    "keepdir() { dodir \"$@\"; local d; for d; do touch \"$IMAGE/$d/.keep\"; done; }\n"
+    "doins() {\n"
+    "    local r= f\n"
+    "    [[ $1 == -r ]] && { r=-r; shift; }\n"
+    "    mkdir -p \"$IMAGE/$INSDESTTREE\"\n"
+    "    for f; do cp -pP $r \"$f\" \"$IMAGE/$INSDESTTREE/\" || die \"doins $f\"; done\n"
+    "}\n"
+    "newins() { mkdir -p \"$IMAGE/$INSDESTTREE\"; cp -p \"$1\" \"$IMAGE/$INSDESTTREE/$2\" || die \"newins $1\"; }\n"
+    "doexe() { local f; mkdir -p \"$IMAGE/$EXEDESTTREE\"; for f; do install -m755 \"$f\" \"$IMAGE/$EXEDESTTREE/\" || die \"doexe $f\"; done; }\n"
+    "newexe() { mkdir -p \"$IMAGE/$EXEDESTTREE\"; install -m755 \"$1\" \"$IMAGE/$EXEDESTTREE/$2\" || die \"newexe $1\"; }\n"
+    "dobin() { local f; mkdir -p \"$IMAGE/usr/$CHOST/bin\"; for f; do install -m755 \"$f\" \"$IMAGE/usr/$CHOST/bin/\" || die \"dobin $f\"; done; }\n"
+    "newbin() { mkdir -p \"$IMAGE/usr/$CHOST/bin\"; install -m755 \"$1\" \"$IMAGE/usr/$CHOST/bin/$2\" || die \"newbin $1\"; }\n"
+    "dosbin() { dobin \"$@\"; }\n"
+    "newsbin() { newbin \"$@\"; }\n"
+    "dolib() { local f; mkdir -p \"$IMAGE/usr/$CHOST/lib\"; for f; do cp -pP \"$f\" \"$IMAGE/usr/$CHOST/lib/\" || die \"dolib $f\"; done; }\n"
+    "dolib.so() { dolib \"$@\"; }\n"
+    "dolib.a() { dolib \"$@\"; }\n"
+    "doheader() { local f; mkdir -p \"$IMAGE/usr/$CHOST/include\"; for f; do cp -p \"$f\" \"$IMAGE/usr/$CHOST/include/\" || die \"doheader $f\"; done; }\n"
+    "dodoc() {\n"
+    "    local r= f\n"
+    "    [[ $1 == -r ]] && { r=-r; shift; }\n"
+    "    mkdir -p \"$IMAGE/usr/share/doc/$PNVR/$DOCDESTTREE\"\n"
+    "    for f; do [[ -e $f ]] && cp -p $r \"$f\" \"$IMAGE/usr/share/doc/$PNVR/$DOCDESTTREE/\"; done\n"
+    "    return 0\n"
+    "}\n"
+    "newdoc() { mkdir -p \"$IMAGE/usr/share/doc/$PNVR\"; cp -p \"$1\" \"$IMAGE/usr/share/doc/$PNVR/$2\"; }\n"
+    "doman() {\n"
+    "    local f s\n"
+    "    for f; do\n"
+    "        s=${f##*.}\n"
+    "        [[ $s == [0-9n]* ]] || continue\n"
+    "        mkdir -p \"$IMAGE/usr/share/man/man${s:0:1}\"\n"
+    "        cp -p \"$f\" \"$IMAGE/usr/share/man/man${s:0:1}/\" || die \"doman $f\"\n"
+    "    done\n"
+    "}\n"
+    "newman() { local s=${2##*.}; mkdir -p \"$IMAGE/usr/share/man/man${s:0:1}\"; cp -p \"$1\" \"$IMAGE/usr/share/man/man${s:0:1}/$2\"; }\n"
+    "dosym() { mkdir -p \"$IMAGE/$(dirname \"$2\")\"; ln -sfn \"$1\" \"$IMAGE/$2\"; }\n"
+    "emagicdocs() {\n"
+    "    local f\n"
+    "    for f in README* AUTHORS ChangeLog NEWS THANKS TODO BUGS FAQ CHANGES* \"${DEFAULT_SRC_INSTALL_EXTRA_DOCS[@]}\"; do\n"
+    "        [[ -f $f && -s $f ]] && dodoc \"$f\"\n"
+    "    done\n"
+    "    return 0\n"
+    "}\n"
+    "alternatives_for() { :; }\n"
+    "expart() { :; }\n"
+    "here_to() { mkdir -p \"$IMAGE/$1\"; cat > \"$IMAGE/$1/$2\"; chmod \"$3\" \"$IMAGE/$1/$2\"; }\n"
+    "hereins() { here_to \"$INSDESTTREE\" \"$1\" 644; }\n"
+    "hereexe() { here_to \"$EXEDESTTREE\" \"$1\" 755; }\n"
+    "herebin() { here_to \"usr/$CHOST/bin\" \"$1\" 755; }\n"
+    "hereenvd() { here_to etc/env.d \"$1\" 644; }\n"
+    "hereconfd() { here_to etc/conf.d \"$1\" 644; }\n"
+    "hereinitd() { here_to etc/init.d \"$1\" 755; }\n"
+    "heredoc() { here_to \"usr/share/doc/$PNVR\" \"$1\" 644; }\n"
+    "\n"
+    "expatch() {\n"
+    "    local p f o=\n"
+    "    [[ $1 == -p* ]] && { o=$1; shift; }\n"
+    "    for p; do\n"
+    "        if [[ -d $p ]]; then for f in \"$p\"/*; do expatch $o \"$f\"; done; continue; fi\n"
+    "        [[ -f $p ]] || continue\n"
+    "        echo \"patching with ${p##*/}\"\n"
+    "        if [[ -n $o ]]; then patch $o -s -N < \"$p\" || die \"patch ${p##*/}\"\n"
+    "        else patch -p1 -s -N < \"$p\" || patch -p0 -s -N < \"$p\" || die \"patch ${p##*/}\"; fi\n"
+    "    done\n"
+    "}\n"
+    "emake() { edo make ${MAKEFLAGS:+-j$JOBS} \"$@\"; }\n"
+    "econf() {\n"
+    "    local src=${ECONF_SOURCE:-.}\n"
+    "    edo \"$src/configure\" --prefix=/usr/$CHOST --bindir=/usr/$CHOST/bin --sbindir=/usr/$CHOST/bin --libdir=/usr/$CHOST/lib \\\n"
+    "        --libexecdir=/usr/$CHOST/libexec --includedir=/usr/$CHOST/include --datarootdir=/usr/share --datadir=/usr/share \\\n"
+    "        --mandir=/usr/share/man --infodir=/usr/share/info --docdir=/usr/share/doc/$PNVR --sysconfdir=/etc --localstatedir=/var \\\n"
+    "        --build=$CHOST --host=$CHOST --disable-dependency-tracking \"$@\"\n"
+    "}\n"
+    "unpack() {\n"
+    "    local f\n"
+    "    for f; do\n"
+    "        [[ $f == */* ]] || f=$FETCHEDDIR/$f\n"
+    "        case $f in\n"
+    "        *.tar|*.tar.*|*.tgz|*.tbz2|*.txz) edo tar -xf \"$f\" ;;\n"
+    "        *.zip) edo unzip -qo \"$f\" ;;\n"
+    "        *.gz) gunzip -c \"$f\" > \"$(basename \"${f%.gz}\")\" ;;\n"
+    "        *.xz) xz -dc \"$f\" > \"$(basename \"${f%.xz}\")\" ;;\n"
+    "        *.bz2) bzip2 -dc \"$f\" > \"$(basename \"${f%.bz2}\")\" ;;\n"
+    "        *) cp \"$f\" . ;;\n"
+    "        esac\n"
+    "    done\n"
+    "}\n"
+    "\n"
+    "default_pkg_setup() { :; }\n"
+    "default_src_unpack() { cd \"$WORKBASE\"; [[ -z $A ]] || unpack $A; }\n"
+    "default_src_prepare() { expatch \"${DEFAULT_SRC_PREPARE_PATCHES[@]}\"; }\n"
+    "default_src_configure() {\n"
+    "    local a=() s\n"
+    "    [[ -x ${ECONF_SOURCE:-.}/configure ]] || return 0\n"
+    "    for s in \"${DEFAULT_SRC_CONFIGURE_OPTION_ENABLES[@]}\"; do a+=($(option_enable \"$s\")); done\n"
+    "    for s in \"${DEFAULT_SRC_CONFIGURE_OPTION_WITHS[@]}\"; do a+=($(option_with \"$s\")); done\n"
+    "    for s in \"${DEFAULT_SRC_CONFIGURE_OPTIONS[@]}\"; do set -- $s; option \"$1\" && shift && a+=(\"$@\"); done\n"
+    "    for s in \"${DEFAULT_SRC_CONFIGURE_TESTS[@]}\"; do set -- $s; [[ -n $2 ]] && a+=(\"$2\"); done\n"
+    "    econf \"${DEFAULT_SRC_CONFIGURE_PARAMS[@]}\" \"${a[@]}\"\n"
+    "}\n"
+    "default_src_compile() { [[ -f Makefile || -f GNUmakefile || -f makefile ]] && emake \"${DEFAULT_SRC_COMPILE_PARAMS[@]}\"; return 0; }\n"
+    "default_src_install() {\n"
+    "    if [[ -f Makefile || -f GNUmakefile || -f makefile ]]; then emake -j1 DESTDIR=\"$IMAGE\" \"${DEFAULT_SRC_INSTALL_PARAMS[@]}\" install; fi\n"
+    "    emagicdocs\n"
+    "}\n"
+    "for p in pkg_setup src_unpack src_prepare src_configure src_compile src_install; do eval \"$p() { default_$p \\\"\\$@\\\"; }\"; done\n"
+    "default() { default_$PHASE \"$@\"; }\n"
+    "\n"
+    "PKGDIR=$(dirname \"$MAG_FILE\")\n"
+    "CATEGORY=$(basename \"$(dirname \"$PKGDIR\")\")\n"
+    "PN=$(basename \"$PKGDIR\")\n"
+    "f=$(basename \"$MAG_FILE\" .exheres-0)\n"
+    "PVR=${f#$PN-} PV=${PVR%-r+([0-9])} PR=r0\n"
+    "[[ $PVR == *-r+([0-9]) ]] && PR=${PVR##*-}\n"
+    "PNV=$PN-$PV PNVR=$PN-$PVR\n"
+    "FILES=$PKGDIR/files WORKBASE=$MAG_WORK/work WORK=$WORKBASE/$PNV IMAGE=$MAG_DEST TEMP=$MAG_WORK/temp FETCHEDDIR=$MAG_SRC/$PN ROOT=/\n"
+    "export PN PV PR PVR PNV PNVR CATEGORY FILES WORKBASE IMAGE TEMP FETCHEDDIR ROOT CHOST\n"
+    "mkdir -p \"$WORKBASE\" \"$TEMP\" \"$IMAGE\"\n"
+    "mkdir -p \"$TEMP/bin\"\n"
+    "for t in cc c++ cpp gcc g++ ar as ld nm strip objcopy objdump readelf ranlib pkg-config; do\n"
+    "    command -v $t >/dev/null && ln -sf \"$(command -v $t)\" \"$TEMP/bin/$CHOST-$t\"\n"
+    "done\n"
+    "PATH=$TEMP/bin:$PATH\n"
+    "source \"$MAG_FILE\"\n"
+    "\n"
+    "ex_downloads() {\n"
+    "    local skip=0 w out=() d=() mirrors\n"
+    "    set -- $DOWNLOADS\n"
+    "    while [[ $# -gt 0 ]]; do\n"
+    "        w=$1; shift\n"
+    "        case $w in\n"
+    "        *'?') if option \"${w%\\?}\"; then d+=(0); else d+=(1); fi; shift ;;\n"
+    "        '(') d+=(0) ;;\n"
+    "        ')') unset 'd[${#d[@]}-1]' ;;\n"
+    "        '->') [[ \" ${d[*]} \" == *' 1 '* ]] || out[${#out[@]}-1]=\"${out[${#out[@]}-1]} $1\"; shift ;;\n"
+    "        *) [[ \" ${d[*]} \" == *' 1 '* ]] || out+=(\"$w\") ;;\n"
+    "        esac\n"
+    "    done\n"
+    "    for w in \"${out[@]}\"; do\n"
+    "        set -- $w\n"
+    "        local u=$1 n=${2:-${1##*/}}\n"
+    "        if [[ $u == mirror://* ]]; then\n"
+    "            local m=${u#mirror://} rest\n"
+    "            rest=${m#*/} m=${m%%/*}\n"
+    "            u=$(awk -v m=\"$m\" '$1 == m { print $2; exit }' \"$MAG_TREE/metadata/mirrors.conf\")${rest}\n"
+    "        fi\n"
+    "        printf '%s\\t%s/%s\\t\\n' \"$u\" \"$PN\" \"$n\"\n"
+    "    done\n"
+    "}\n"
+    "if [[ $MAG_STEP == list ]]; then ex_downloads > \"$MAG_OUT\"; exit 0; fi\n"
+    "A=$(ex_downloads | cut -f2 | sed 's|.*/||' | tr '\\n' ' ')\n"
+    "[ -f /etc/mag/build.conf ] && . /etc/mag/build.conf\n"
+    "export CFLAGS=\"${CFLAGS:--O2 -pipe}\" CXXFLAGS=\"${CXXFLAGS:-${CFLAGS:--O2 -pipe}}\" LDFLAGS JOBS=${MAKEFLAGS#-j}\n"
+    "JOBS=${JOBS:-$(nproc)}\n"
+    "export CC=cc CXX=c++ CPP=cpp LD=ld AR=ar AS=as RANLIB=ranlib STRIP=strip NM=nm PKG_CONFIG=pkg-config\n"
+    "for PHASE in pkg_setup src_unpack src_prepare src_configure src_compile src_install; do\n"
+    "    if [[ $PHASE == src_unpack ]]; then cd \"$WORKBASE\"; else cd \"$WORK\" 2>/dev/null || cd \"$WORKBASE\"; fi\n"
+    "    echo \"==> $PHASE\"\n"
+    "    $PHASE\n"
+    "done\n"
+    "cd \"$IMAGE\" || exit 1\n"
+    "if [[ -d usr/$CHOST ]]; then\n"
+    "    cp -a \"usr/$CHOST/.\" usr/\n"
+    "    rm -rf \"usr/$CHOST\"\n"
+    "    grep -rlI \"/$CHOST\" usr/lib usr/share 2>/dev/null | while read -r f; do sed -i -e \"s|/usr/$CHOST|/usr|g\" -e \"s|}/$CHOST|}|g\" \"$f\"; done\n"
+    "fi\n"
+    "find . -name '*.la' -delete\n"
+    "rm -f usr/share/info/dir\n"
+    "if command -v strip >/dev/null; then\n"
+    "    find . -type f \\( -perm -100 -o -name '*.so' -o -name '*.so.*' \\) -exec strip --strip-unneeded {} + 2>/dev/null || :\n"
+    "fi\n"
+    "find . -depth -type d -empty -delete\n";
+
+
+/* what xbps-src or paludis would do: the sources, checked against the checksums Void has (Exherbo has none), then the
+ * phases, with the helpers of the tree */
+static void build_tree(const struct pkg *p, const char *stage)
+{
+    int k = kinds[p->repo], told = 0;
+    char *dir = tree_dir(p->repo), *tree = fmt("%s/tree", dir), *work = fmt("%s/var/tmp/mag/build/%s", root, p->name);
+    char *cache = fmt("%s/var/cache/mag/src", root), *list = fmt("%s/sources", work), *file = fmt("%s/%s", tree, p->csum ? p->csum : "");
+    const char *sh = k == VOID ? void_sh : exherbo_sh;
+    const char *vars[] = { "MAG_TREE", "MAG_PORT", "MAG_FILE", "MAG_ARCH", "MAG_WORK", "MAG_DEST", "MAG_SRC", "MAG_OUT", "MAG_STEP" };
+    char *t, *line, *next;
+    struct list files = { 0 }, dirs = { 0 };
+    int i;
+    printf("==> building %s %s\n", p->name, p->ver);
+    rmtree(work);
+    rmtree(stage);
+    mkpath(work, 0755);
+    mkpath(stage, 0755);
+    mkpath(cache, 0755);
+    setenv("MAG_TREE", in_root(tree), 1);
+    setenv("MAG_PORT", p->name, 1);
+    setenv("MAG_FILE", in_root(file), 1);
+    setenv("MAG_ARCH", arch, 1);
+    setenv("MAG_WORK", in_root(work), 1);
+    setenv("MAG_DEST", in_root(stage), 1);
+    setenv("MAG_SRC", in_root(cache), 1);
+    setenv("MAG_OUT", in_root(list), 1);
+    setenv("MAG_STEP", "list", 1);
+    if (shell(sh)) die("%s: cannot read what it is built from", p->name);
+    unsetenv("MAG_STEP");
+    t = slurp(list, NULL);
+    for (line = t; line && *line; line = next) {
+        char *rel, *sum, *c, *f, *have, *base;
+        next = strchr(line, '\n');
+        if (next) *next++ = 0;
+        if (!(rel = strchr(line, '\t'))) continue;
+        *rel++ = 0;
+        if ((sum = strchr(rel, '\t'))) *sum++ = 0; else sum = "";
+        c = clean(rel);
+        if (!c || strcmp(c, rel) || strpbrk(rel, "'\\")) die("%s: a source with a bad name, %s", p->name, rel);
+        free(c);
+        base = strrchr(rel, '/') ? strrchr(rel, '/') + 1 : rel;
+        if (*sum == '@') die("%s: the checksum of %s is of what is in it, which mag cannot check", p->name, base);
+        f = fmt("%s/%s", cache, rel);
+        have = exists(f) ? sha256_file(f) : NULL;
+        if (!have || (*sum && strcmp(have, sum))) {
+            printf("==> fetching %s\n", line);
+            free(have);
+            mkparent(f);
+            if (download(line, f)) die("could not fetch %s", line);
+            have = sha256_file(f);
+        }
+        if (*sum && (!have || strcmp(have, sum))) { unlink(f); die("%s: %s does not match the checksum in its template", p->name, base); }
+        if (!*sum && !told++) printf("==> Exherbo has no checksums: the sources of %s are as good as the connection they came over\n", p->name);
+        free(f); free(have);
+    }
+    free(t);
+    if (shell(sh)) die("%s did not build, what it left is in %s", p->name, work);
+    for (i = 0; i < 9; i++) unsetenv(vars[i]);
+    walk(stage, "", &files, &dirs);
+    if (!files.n) die("%s built nothing", p->name);
+    list_free(&files); list_free(&dirs);
+    rmtree(work);
+    free(dir); free(tree); free(work); free(cache); free(list); free(file);
+}
+
 /* ---- installing a package ---- */
 
 static char *pkg_file(const struct pkg *p) { return fmt("%s/var/cache/mag/pkg/%s-%s.apk", root, p->name, p->ver); }
@@ -2104,7 +2899,7 @@ static void install_one(struct pkg *p, int explicit, const struct list *planned)
     int i, bad = 0, port = kinds[p->repo] != APK;
     if (port) {
         memset(&ctl, 0, sizeof ctl);
-        build_port(p, stage);
+        if (kinds[p->repo] == CRUX) build_port(p, stage); else build_tree(p, stage);
     } else {
         int fresh = !exists(file);
         if (fresh) fetch_pkg(p, file);
@@ -2237,6 +3032,26 @@ static void plan_tool(const char *name, struct list *order, struct list *stack)
     if (q && !installed(name) && !has(order, name)) plan(q, order, stack);
 }
 
+/* the name a Void or Exherbo dependency goes by in the repos: Void's -devel is their -dev, and what comes built wins */
+static char *port_dep(int kind, const char *w)
+{
+    static const char *const alias[][2] = { { "pkg-config", "pkgconf" }, { "liblzma", "xz" }, { "libuuid", "util-linux" }, { "gettext-tiny", "gettext" } };
+    char *n = xstrdup(w), *c[3] = { 0 }, *best = NULL;
+    size_t l = strlen(n);
+    int i, dev = kind == VOID && l > 6 && !strcmp(n + l - 6, "-devel");
+    struct pkg *q;
+    if (dev) n[l - 6] = 0;
+    for (i = 0; i < 4; i++) if (!strcmp(n, alias[i][0])) { free(n); n = xstrdup(alias[i][1]); break; }
+    if (dev) { c[0] = fmt("%s-dev", n); if (!strncmp(n, "lib", 3)) c[1] = fmt("%s-dev", n + 3); }
+    c[2] = xstrdup(n);
+    for (i = 0; i < 3 && !best; i++) if (c[i] && (q = newest(c[i])) && kinds[q->repo] == APK) best = c[i];
+    for (i = 0; i < 3 && !best; i++) if (c[i] && newest(c[i])) best = c[i];
+    best = xstrdup(best ? best : n);
+    for (i = 0; i < 3; i++) free(c[i]);
+    free(n);
+    return best;
+}
+
 static void plan(struct pkg *p, struct list *order, struct list *stack)
 {
     struct list w;
@@ -2244,13 +3059,15 @@ static void plan(struct pkg *p, struct list *order, struct list *stack)
     if (has(order, p->name) || has(stack, p->name)) return;
     push(stack, p->name);
     if (port) { plan_tool("build-base", order, stack); plan_tool("pkgconf", order, stack); plan_tool("bash", order, stack); }
+    if (port && kinds[p->repo] != CRUX) { plan_tool("tar", order, stack); plan_tool("xz", order, stack); }
     w = words(p->deps);
     for (i = 0; i < w.n; i++) {
         struct dep d;
         struct pkg *c;
         int done = 0;
-        dep_parse(w.v[i], &d);
-        if (d.neg) continue;
+        if (port && kinds[p->repo] != CRUX) { char *m = port_dep(kinds[p->repo], w.v[i]); dep_parse(m, &d); free(m); }
+        else dep_parse(w.v[i], &d);
+        if (d.neg || !strcmp(d.key, p->name)) continue;
         for (j = 0; j < order->n && !done; j++) {
             struct pkg *q = newest(order->v[j]);
             done = q && meets(&d, q->name, q->ver, q->prov);
@@ -2260,7 +3077,11 @@ static void plan(struct pkg *p, struct list *order, struct list *stack)
                 struct pkg *q = newest(wanted.v[j]);
                 if (q && meets(&d, q->name, q->ver, q->prov)) c = q;
             }
-            if (!c && !(c = pick(&d))) die("%s needs %s, which no repo has", p->name, w.v[i]);
+            if (!c && !(c = pick(&d))) {
+                if (!port || kinds[p->repo] == CRUX) die("%s needs %s, which no repo has", p->name, w.v[i]);
+                say("%s wants %s, which no repo has, building without it", p->name, w.v[i]);
+                continue;
+            }
             plan(c, order, stack);
         }
         if (port) {
@@ -2349,7 +3170,7 @@ static int cmd_update(void)
     int i, bad = 0;
     for (i = 0; i < repo_urls.n; i++) {
         char *base, *url, *f, *tmp;
-        if (kinds[i] != APK) { bad |= sync_tree(i); continue; }
+        if (kinds[i] != APK) { bad |= kinds[i] == CRUX ? sync_tree(i) : sync_archive(i); continue; }
         base = repo_base(i); url = fmt("%s/APKINDEX.tar.gz", base); f = index_file(i); tmp = fmt("%s.new", f);
         printf("==> %s\n", url);
         if (download(url, tmp)) { say("could not fetch %s", url); bad = 1; }
@@ -2367,6 +3188,16 @@ static int cmd_build(int n, char **names)
     int i;
     load_index();
     for (i = 0; i < n; i++) {
+        if (!port_of(names[i])) {
+            int j;
+            for (j = 0; j < npkgs; j++) {
+                struct list pv;
+                if (kinds[pkgs[j].repo] == APK || !pkgs[j].prov) continue;
+                pv = words(pkgs[j].prov);
+                if (has(&pv, names[i])) names[i] = pkgs[j].name;
+                list_free(&pv);
+            }
+        }
         if (!port_of(names[i])) die("%s is in no port tree", names[i]);
         push(&from_ports, names[i]);
     }
@@ -2445,8 +3276,10 @@ static int cmd_list(void)
 static int cmd_info(const char *name)
 {
     struct pkg *p;
-    char *v = db_get(name, "version");
+    char *v = db_get(name, "version"), *port = db_get(name, "port");
     load_index();
+    if (port) push(&from_ports, xstrdup(name));
+    free(port);
     p = newest(name);
     if (!p && !v) die("%s is in no repo and not installed", name);
     if (p) {
@@ -2454,7 +3287,7 @@ static int cmd_info(const char *name)
         if (p->desc) printf("  %s\n", p->desc);
         if (p->deps) printf("  needs: %s\n", p->deps);
         if (p->size) printf("  size: %s bytes\n", p->size);
-        printf("  from: %s%s\n", kinds[p->repo] == CRUX ? "crux " : "", repo_urls.v[p->repo]);
+        printf("  from: %s%s%s\n", kind_name[kinds[p->repo]], kinds[p->repo] != APK ? " " : "", repo_urls.v[p->repo]);
     } else printf("%s\n", name);
     if (v) printf("  installed: %s\n", v); else puts("  not installed");
     free(v);
@@ -2553,7 +3386,9 @@ static void usage(void)
          "\n"
          "/etc/mag/repos has one repo url a line, /etc/mag/keys the public keys they are signed with, /etc/mag/arch\n"
          "which builds to get (written on the first install, the machine's own if it is not there). A line \"crux URL\" is a\n"
-         "CRUX port tree, like crux https://crux.nu/ports/crux-3.8/opt; its key, opt.pub, goes in /etc/mag/keys too. What a\n"
+         "CRUX port tree, like crux https://crux.nu/ports/crux-3.8/opt; its key, opt.pub, goes in /etc/mag/keys too.\n"
+         "\"void https://github.com/void-linux/void-packages\" builds Void's templates, \"exherbo https://gitlab.exherbo.org/exherbo/arbor\"\n"
+         "Exherbo's exheres; those two come whole as a tarball on mag update and are not signed. What a\n"
          "repo has built wins over a port, mag build takes the port. Ports build with bash and the CFLAGS, CXXFLAGS and\n"
          "MAKEFLAGS of /etc/mag/build.conf, if it is there.\n"
          "MAG_ROOT installs somewhere else than /, MAG_ARCH overrides the arch, MAG_FETCH is the download command, which gets a file and an url (curl, else wget, else ftp)");

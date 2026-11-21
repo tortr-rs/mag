@@ -24,6 +24,12 @@ the sources against it, and `build()` runs with bash. What a repo has built wins
 `mag install` takes a port only when no repo has it. A port gets build-base, pkgconf and bash, and the `-dev`
 package of every dependency that comes built.
 
+Void and Exherbo work as well: `void https://github.com/void-linux/void-packages` and `exherbo
+https://gitlab.exherbo.org/exherbo/arbor`. `mag update` gets the tree as a tarball. A Void template is run with
+the helpers in the tree's `common/`, as xbps-src runs it, and its sources are checked against the template's sha256.
+An exheres is run on a small exheres-0 in mag, with the tree's exlibs. Neither tree is signed, and exheres have no
+checksums for their sources.
+
 What it does on the way: files are checked against what other packages own before anything is touched, they
 are put in place with a rename so a running program is never half written, and a changed file under /etc is
 left alone (the new one comes as `.new`). A package's scripts run inside the root; one whose interpreter is not
