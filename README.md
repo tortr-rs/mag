@@ -1,38 +1,26 @@
 mag
 ===
 
-The package manager, one C file on c.h, built with clang and lld. No libc under it, no GNU in it.
+The package manager, one C file. It installs prebuilt packages from apk repos: it reads their signed index,
+works out what a package needs, checks every download against the index and the package's own hash, and puts
+the files in place. gzip, tar and the rsa check are in mag itself, the only thing it runs is a download
+command (curl, else wget, else ftp).
 
-A recipe is a plain file in a repo, `category/name`, like `dev-vcs/git`:
+    ./build.sh               builds ./mag on c.h (x86_64)
+    cc -DLIBC -static mag.c  builds it on a libc, for any other cpu
 
-    desc: the stupid content tracker
-    version: 2.47.0
-    url: https://mirrors.edge.kernel.org/pub/software/scm/git/git-${version}.tar.xz
-    sha256: 1ce114da88704271b43e027c51e04d9399f8c88e9ef7542dae7aebae7d87bc4e
-    deps: sys-libs/zlib
-    steps:
-    	make -j$JOBS prefix=$PREFIX all
-    	make prefix=$PREFIX DESTDIR=$DESTDIR install
+    mag update               gets the index of every repo
+    mag install tmux         tmux and what it needs
+    mag remove tmux          mag help has the rest
 
-`url`, `sha256`, `deps` and `steps` are the ones that matter. The steps are plain sh, run with `sh -e` inside
-the unpacked source (leading components stripped), with `$DESTDIR` (everything goes there), `$PREFIX` (/usr),
-`$JOBS`, `$NAME`, `$VERSION`, `$SRC` and `$RECIPE_DIR` set. If the recipe is a directory with a file called
-`recipe` in it, whatever else is in there (patches) is at `$RECIPE_DIR`.
-
-    ./build.sh               builds ./mag
-    mag install git          fetches, checks the sha256, builds, installs, dependencies first
-    mag remove git           mag help has the rest
-    tests/run.sh             a fake repo with local tarballs, install to remove in a scratch root
+`/etc/mag/repos` has one repo a line (the url above the arch directory), `/etc/mag/keys` the public keys the
+indexes are signed with, `/etc/mag/arch` which builds to get, `x86_64` or `x86` and so on. It is written on
+the first install, and without it mag goes by the machine.
 
 What it does on the way: files are checked against what other packages own before anything is touched, they
-are put in place with a rename so a running program is never half written, and anything under /etc that is
-already there is left alone (a changed one comes as `.new`). Every package keeps its file list in
-`var/lib/mag`, so `remove`, `files`, `owns` and `autoremove` need nothing else.
+are put in place with a rename so a running program is never half written, and a changed file under /etc is
+left alone (the new one comes as `.new`). A package's scripts run inside the root; one whose interpreter is not
+installed yet waits until the end. Every package keeps its file list in `var/lib/mag`, so `remove`, `files`,
+`owns` and `autoremove` need nothing else.
 
-`MAG_ROOT` installs somewhere else than /, `MAG_REPO` is a list of repos split by colons (default
-`/usr/share/mag/repo:/usr/pkgsrc`), `MAG_FETCH` is the
-download command (it needs https, which mag does not do itself: `ftp -o`, NetBSD's ftp, by default). tar and rm come from the
-system, which here means rifle and a tar.
-
-`mag sync` downloads the pkgsrc tree (`MAG_SYNC_URL`, NetBSD's `pkgsrc.tar.xz` if unset) with the same download command and
-unpacks it into `/usr/pkgsrc`, or `$MAG_ROOT/usr/pkgsrc`. `CONFIGURE_ARGS.name` in `/etc/mag.conf` adds configure arguments to one pkgsrc package.
+`MAG_ROOT` installs somewhere else than /, `MAG_ARCH` overrides the arch, `MAG_FETCH` is the download command.
