@@ -1,10 +1,10 @@
 mag
 ===
 
-The package manager, one C file. It installs prebuilt packages from apk repos: it reads their signed index,
-works out what a package needs, checks every download against the index and the package's own hash, and puts
-the files in place. gzip, tar and the rsa check are in mag itself, the only thing it runs is a download
-command (curl, else wget, else ftp).
+The package manager, one C file. It installs prebuilt packages from apk and pacman repos: it reads their signed
+index, works out what a package needs, checks every download against the index and its signature, and puts
+the files in place. gzip, zstd, tar, rsa, ed25519 and OpenPGP are in mag itself, the only thing it runs is a
+download command (curl, else wget, else ftp).
 
     ./build.sh               builds ./mag on c.h (x86_64)
     cc -DLIBC -static mag.c  builds it on a libc, for any other cpu
@@ -29,6 +29,13 @@ https://gitlab.exherbo.org/exherbo/arbor`. `mag update` gets the tree as a tarba
 the helpers in the tree's `common/`, as xbps-src runs it, and its sources are checked against the template's sha256.
 An exheres is run on a small exheres-0 in mag, with the tree's exlibs. Neither tree is signed, and exheres have no
 checksums for their sources.
+
+pacman repos are read as they are: `pacman https://geo.mirror.pkgbuild.com/extra/os` (the url above the arch
+directory). mag reads the database, checks a package against its sha256 there and its OpenPGP signature (RSA or
+ed25519) with the keyrings in `/usr/share/pacman/keyrings` and any `*.gpg` in `/etc/mag/keys`, runs its
+`.INSTALL` and, after the run, the hooks in `/usr/share/libalpm/hooks` as pacman does. A name in two pacman repos
+comes from the first, as in pacman. `aur https://aur.archlinux.org` adds the AUR: its metadata dump is the index,
+and a package is built with makepkg as nobody, with its build dependencies from the binary repos first.
 
 What it does on the way: files are checked against what other packages own before anything is touched, they
 are put in place with a rename so a running program is never half written, and a changed file under /etc is

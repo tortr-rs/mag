@@ -22,7 +22,7 @@
 #include <sys/wait.h>
 #endif
 
-#define VERSION "0.5.1"
+#define VERSION "0.6"
 
 static const char *prog = "mag";
 static const char *root = "";                   /* MAG_ROOT without the trailing slash, "" is / */
@@ -212,30 +212,75 @@ static void sha1_block(unsigned *h, const unsigned char *p)
     h[0] += a; h[1] += b; h[2] += c; h[3] += d; h[4] += e;
 }
 
-struct hash { unsigned h[8]; unsigned char b[64]; uint64_t len; int sha1; };
+static const uint64_t k512[80] = {
+    0x428a2f98d728ae22ull, 0x7137449123ef65cdull, 0xb5c0fbcfec4d3b2full, 0xe9b5dba58189dbbcull, 0x3956c25bf348b538ull, 0x59f111f1b605d019ull,
+    0x923f82a4af194f9bull, 0xab1c5ed5da6d8118ull, 0xd807aa98a3030242ull, 0x12835b0145706fbeull, 0x243185be4ee4b28cull, 0x550c7dc3d5ffb4e2ull,
+    0x72be5d74f27b896full, 0x80deb1fe3b1696b1ull, 0x9bdc06a725c71235ull, 0xc19bf174cf692694ull, 0xe49b69c19ef14ad2ull, 0xefbe4786384f25e3ull,
+    0x0fc19dc68b8cd5b5ull, 0x240ca1cc77ac9c65ull, 0x2de92c6f592b0275ull, 0x4a7484aa6ea6e483ull, 0x5cb0a9dcbd41fbd4ull, 0x76f988da831153b5ull,
+    0x983e5152ee66dfabull, 0xa831c66d2db43210ull, 0xb00327c898fb213full, 0xbf597fc7beef0ee4ull, 0xc6e00bf33da88fc2ull, 0xd5a79147930aa725ull,
+    0x06ca6351e003826full, 0x142929670a0e6e70ull, 0x27b70a8546d22ffcull, 0x2e1b21385c26c926ull, 0x4d2c6dfc5ac42aedull, 0x53380d139d95b3dfull,
+    0x650a73548baf63deull, 0x766a0abb3c77b2a8ull, 0x81c2c92e47edaee6ull, 0x92722c851482353bull, 0xa2bfe8a14cf10364ull, 0xa81a664bbc423001ull,
+    0xc24b8b70d0f89791ull, 0xc76c51a30654be30ull, 0xd192e819d6ef5218ull, 0xd69906245565a910ull, 0xf40e35855771202aull, 0x106aa07032bbd1b8ull,
+    0x19a4c116b8d2d0c8ull, 0x1e376c085141ab53ull, 0x2748774cdf8eeb99ull, 0x34b0bcb5e19b48a8ull, 0x391c0cb3c5c95a63ull, 0x4ed8aa4ae3418acbull,
+    0x5b9cca4f7763e373ull, 0x682e6ff3d6b2b8a3ull, 0x748f82ee5defb2fcull, 0x78a5636f43172f60ull, 0x84c87814a1f0ab72ull, 0x8cc702081a6439ecull,
+    0x90befffa23631e28ull, 0xa4506cebde82bde9ull, 0xbef9a3f7b2c67915ull, 0xc67178f2e372532bull, 0xca273eceea26619cull, 0xd186b8c721c0c207ull,
+    0xeada7dd6cde0eb1eull, 0xf57d4f7fee6ed178ull, 0x06f067aa72176fbaull, 0x0a637dc5a2c898a6ull, 0x113f9804bef90daeull, 0x1b710b35131c471bull,
+    0x28db77f523047d84ull, 0x32caab7b40c72493ull, 0x3c9ebe0a15c9bebcull, 0x431d67c49c100d4cull, 0x4cc5d4becb3e42b6ull, 0x597f299cfc657e2aull,
+    0x5fcb6fab3ad6faecull, 0x6c44198c4a475817ull };
+
+#define ROR64(x, n) ((x) >> (n) | (x) << (64 - (n)))
+
+static void sha512_block(uint64_t *h, const unsigned char *p)
+{
+    uint64_t w[80], v[8];
+    int i, j;
+    for (j = 0; j < 16; j++) for (w[j] = 0, i = 0; i < 8; i++) w[j] = w[j] << 8 | p[j * 8 + i];
+    for (j = 16; j < 80; j++)
+        w[j] = w[j - 16] + (ROR64(w[j - 15], 1) ^ ROR64(w[j - 15], 8) ^ w[j - 15] >> 7) + w[j - 7] + (ROR64(w[j - 2], 19) ^ ROR64(w[j - 2], 61) ^ w[j - 2] >> 6);
+    memcpy(v, h, sizeof v);
+    for (j = 0; j < 80; j++) {
+        uint64_t t1 = v[7] + (ROR64(v[4], 14) ^ ROR64(v[4], 18) ^ ROR64(v[4], 41)) + ((v[4] & v[5]) ^ (~v[4] & v[6])) + k512[j] + w[j];
+        uint64_t t2 = (ROR64(v[0], 28) ^ ROR64(v[0], 34) ^ ROR64(v[0], 39)) + ((v[0] & v[1]) ^ (v[0] & v[2]) ^ (v[1] & v[2]));
+        memmove(v + 1, v, 7 * sizeof *v);
+        v[4] += t1;
+        v[0] = t1 + t2;
+    }
+    for (j = 0; j < 8; j++) h[j] += v[j];
+}
+
+/* sha1 is 1 for sha1, 0 for sha256, 2 for sha512 */
+struct hash { unsigned h[8]; uint64_t h64[8]; unsigned char b[128]; uint64_t len; int sha1; };
 
 static void hash_init(struct hash *s, int sha1)
 {
     static const unsigned i1[5] = { 0x67452301, 0xefcdab89, 0x98badcfe, 0x10325476, 0xc3d2e1f0 };
     static const unsigned i2[8] = { 0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19 };
+    static const uint64_t i5[8] = { 0x6a09e667f3bcc908ull, 0xbb67ae8584caa73bull, 0x3c6ef372fe94f82bull, 0xa54ff53a5f1d36f1ull,
+        0x510e527fade682d1ull, 0x9b05688c2b3e6c1full, 0x1f83d9abfb41bd6bull, 0x5be0cd19137e2179ull };
     memset(s, 0, sizeof *s);
     s->sha1 = sha1;
-    memcpy(s->h, sha1 ? i1 : i2, sha1 ? sizeof i1 : sizeof i2);
+    if (sha1 == 2) memcpy(s->h64, i5, sizeof i5);
+    else memcpy(s->h, sha1 ? i1 : i2, sha1 ? sizeof i1 : sizeof i2);
+}
+
+static void hash_block(struct hash *s, const unsigned char *p)
+{
+    if (s->sha1 == 2) sha512_block(s->h64, p); else if (s->sha1) sha1_block(s->h, p); else sha256_block(s->h, p);
 }
 
 static void hash_add(struct hash *s, const void *data, size_t n)
 {
     const unsigned char *p = data;
-    size_t used = s->len % 64;
+    size_t bs = s->sha1 == 2 ? 128 : 64, used = s->len % bs;
     s->len += n;
     if (used) {
-        size_t k = 64 - used < n ? 64 - used : n;
+        size_t k = bs - used < n ? bs - used : n;
         memcpy(s->b + used, p, k);
         p += k; n -= k;
-        if (used + k < 64) return;
-        if (s->sha1) sha1_block(s->h, s->b); else sha256_block(s->h, s->b);
+        if (used + k < bs) return;
+        hash_block(s, s->b);
     }
-    for (; n >= 64; p += 64, n -= 64) if (s->sha1) sha1_block(s->h, p); else sha256_block(s->h, p);
+    for (; n >= bs; p += bs, n -= bs) hash_block(s, p);
     memcpy(s->b, p, n);
 }
 
@@ -244,11 +289,12 @@ static int hash_end(struct hash *s, unsigned char *out)
 {
     uint64_t bits = s->len * 8;
     unsigned char c = 0x80;
-    int i, w = s->sha1 ? 5 : 8;
+    int i, big = s->sha1 == 2, w = s->sha1 == 1 ? 5 : 8;
     hash_add(s, &c, 1);
     c = 0;
-    while (s->len % 64 != 56) hash_add(s, &c, 1);
-    for (i = 7; i >= 0; i--) { c = bits >> (i * 8); hash_add(s, &c, 1); }
+    while (s->len % (big ? 128 : 64) != (big ? 112u : 56u)) hash_add(s, &c, 1);
+    for (i = big ? 15 : 7; i >= 0; i--) { c = i > 7 ? 0 : bits >> (i * 8); hash_add(s, &c, 1); }
+    if (big) { for (i = 0; i < 64; i++) out[i] = s->h64[i / 8] >> (56 - 8 * (i % 8)); return 64; }
     for (i = 0; i < w * 4; i++) out[i] = s->h[i / 4] >> (24 - 8 * (i % 4));
     return w * 4;
 }
@@ -265,7 +311,7 @@ static char *hex(const unsigned char *d, int n)
 static int hash_range(int fd, off_t from, off_t to, int sha1, unsigned char *out)
 {
     struct hash h;
-    unsigned char buf[65536];
+    static unsigned char buf[65536];
     ssize_t n;
     hash_init(&h, sha1);
     lseek(fd, from, SEEK_SET);
@@ -475,6 +521,367 @@ static int gunzip(struct in *r, outfn *out, void *ctx)
     bad = s->bad;
     free(s);
     return bad ? -1 : 0;
+}
+
+/* ---- zstd ---- */
+
+struct rb { const unsigned char *s; size_t n; long bit; };
+
+static int rb_init(struct rb *b, const unsigned char *s, size_t n)
+{
+    int h;
+    if (!n || !s[n - 1]) return -1;
+    for (h = 7; !(s[n - 1] >> h & 1); h--) {}
+    b->s = s; b->n = n; b->bit = (long)(n - 1) * 8 + h;
+    return 0;
+}
+
+static uint64_t rb_peek(const struct rb *b, int k)
+{
+    long lo = b->bit - k;
+    uint64_t w = 0;
+    size_t at;
+    int i, sh;
+    if (!k) return 0;
+    if (lo < 0) {
+        uint64_t v = 0;
+        long j;
+        for (j = b->bit - 1; j >= lo; j--) v = v << 1 | (j >= 0 ? b->s[j >> 3] >> (j & 7) & 1 : 0);
+        return v;
+    }
+    at = lo >> 3; sh = lo & 7;
+    for (i = 0; i < 8 && at + i < b->n; i++) w |= (uint64_t)b->s[at + i] << (8 * i);
+    return w >> sh & (((uint64_t)1 << k) - 1);
+}
+
+static uint64_t rb_get(struct rb *b, int k) { uint64_t v = rb_peek(b, k); b->bit -= k; return v; }
+
+struct fse { unsigned char sym, nb; unsigned short base; };
+struct ftab { struct fse t[512]; int al; };
+
+static int highbit(unsigned v) { int h = -1; while (v) { v >>= 1; h++; } return h; }
+
+static void fse_build(struct ftab *f, const short *norm, int nsym, int al)
+{
+    int size = 1 << al, high = size - 1, pos = 0, step = (size >> 1) + (size >> 3) + 3, s, i;
+    unsigned short next[64];
+    f->al = al;
+    for (s = 0; s < nsym; s++) if (norm[s] == -1) f->t[high--].sym = s;
+    for (s = 0; s < nsym; s++)
+        for (i = 0; i < norm[s]; i++) {
+            f->t[pos].sym = s;
+            do pos = (pos + step) & (size - 1); while (pos > high);
+        }
+    for (s = 0; s < nsym; s++) next[s] = norm[s] == -1 ? 1 : norm[s];
+    for (i = 0; i < size; i++) {
+        unsigned n = next[f->t[i].sym]++;
+        f->t[i].nb = al - highbit(n);
+        f->t[i].base = (n << f->t[i].nb) - size;
+    }
+}
+
+static void fse_rle(struct ftab *f, int sym) { f->al = 0; f->t[0].sym = sym; f->t[0].nb = 0; f->t[0].base = 0; }
+
+/* a table description, read forward; the bytes it took, or -1 */
+static long fse_read(struct ftab *f, const unsigned char *p, size_t n, int maxsym, int maxal)
+{
+    short norm[64];
+    long pos = 0;
+    int al, remaining, threshold, nb, sym = 0, prev0 = 0;
+#define FGET(k) ((size_t)((pos + (k) + 7) >> 3) > n ? -1 : (int)((((uint32_t)p[pos >> 3] | (pos / 8 + 1 < (long)n ? (uint32_t)p[pos / 8 + 1] << 8 : 0) | (pos / 8 + 2 < (long)n ? (uint32_t)p[pos / 8 + 2] << 16 : 0)) >> (pos & 7)) & ((1u << (k)) - 1)))
+    if (!n) return -1;
+    al = (p[0] & 15) + 5;
+    pos = 4;
+    if (al > maxal) return -1;
+    remaining = (1 << al) + 1; threshold = 1 << al; nb = al + 1;
+    while (remaining > 1 && sym <= maxsym) {
+        int max, count, v;
+        if (prev0) {
+            int n0 = sym;
+            while ((v = FGET(2)) == 3) { n0 += 3; pos += 2; }
+            if (v < 0) return -1;
+            n0 += v; pos += 2;
+            if (n0 > maxsym + 1) return -1;
+            while (sym < n0) norm[sym++] = 0;
+            if (sym > maxsym) break;
+        }
+        max = (2 * threshold - 1) - remaining;
+        if ((v = FGET(nb)) < 0 && (v = FGET(nb - 1)) < 0) return -1;
+        if ((v & (threshold - 1)) < max) { count = v & (threshold - 1); pos += nb - 1; }
+        else { count = v & (2 * threshold - 1); if (count >= threshold) count -= max; pos += nb; }
+        count--;
+        remaining -= count < 0 ? -count : count;
+        norm[sym++] = count;
+        prev0 = !count;
+        while (remaining < threshold) { nb--; threshold >>= 1; }
+    }
+#undef FGET
+    if (remaining != 1 || (pos + 7) >> 3 > (long)n) return -1;
+    while (sym <= maxsym) norm[sym++] = 0;
+    fse_build(f, norm, maxsym + 1, al);
+    return (pos + 7) >> 3;
+}
+
+struct htab { unsigned short e[2048]; int bits; };   /* sym << 8 | length */
+
+/* a Huffman tree description: the bytes it took, or -1 */
+static long huf_read(struct htab *h, const unsigned char *p, size_t n)
+{
+    unsigned char w[256];
+    int nw = 0, i, maxbits, rank[13];
+    unsigned total = 0, rest;
+    long used;
+    if (!n) return -1;
+    if (p[0] >= 128) {
+        nw = p[0] - 127;
+        used = 1 + (nw + 1) / 2;
+        if ((size_t)used > n) return -1;
+        for (i = 0; i < nw; i++) w[i] = i & 1 ? p[1 + i / 2] & 15 : p[1 + i / 2] >> 4;
+    } else {
+        struct ftab f;
+        struct rb b;
+        long k;
+        int s1, s2;
+        used = 1 + p[0];
+        if ((size_t)used > n || (k = fse_read(&f, p + 1, p[0], 12, 6)) < 0 || rb_init(&b, p + 1 + k, p[0] - k)) return -1;
+        s1 = rb_get(&b, f.al); s2 = rb_get(&b, f.al);
+        for (;;) {
+            if (nw > 254) return -1;
+            w[nw++] = f.t[s1].sym;
+            s1 = f.t[s1].base + rb_get(&b, f.t[s1].nb);
+            if (b.bit < 0) { w[nw++] = f.t[s2].sym; break; }
+            if (nw > 254) return -1;
+            w[nw++] = f.t[s2].sym;
+            s2 = f.t[s2].base + rb_get(&b, f.t[s2].nb);
+            if (b.bit < 0) { w[nw++] = f.t[s1].sym; break; }
+        }
+    }
+    for (i = 0; i < nw; i++) { if (w[i] > 12) return -1; if (w[i]) total += 1u << (w[i] - 1); }
+    if (!total || nw > 255) return -1;
+    maxbits = highbit(total) + 1;
+    rest = (1u << maxbits) - total;
+    if (rest & (rest - 1) || maxbits > 11) return -1;
+    w[nw++] = highbit(rest) + 1;
+    h->bits = maxbits;
+    memset(rank, 0, sizeof rank);
+    for (i = 0; i < nw; i++) rank[w[i]]++;
+    {
+        int start = 0, c, r;
+        for (r = 1; r <= maxbits; r++) { c = start; start += rank[r] << (r - 1); rank[r] = c; }
+    }
+    for (i = 0; i < nw; i++) {
+        int len, u;
+        if (!w[i]) continue;
+        len = 1 << (w[i] - 1);
+        for (u = rank[w[i]]; u < rank[w[i]] + len; u++) h->e[u] = i << 8 | (maxbits + 1 - w[i]);
+        rank[w[i]] += len;
+    }
+    return used;
+}
+
+static int huf_stream(const struct htab *h, const unsigned char *p, size_t n, unsigned char *out, size_t count)
+{
+    struct rb b;
+    size_t i;
+    if (rb_init(&b, p, n)) return -1;
+    for (i = 0; i < count; i++) {
+        unsigned e = h->e[rb_peek(&b, h->bits)];
+        out[i] = e >> 8;
+        b.bit -= e & 255;
+    }
+    return b.bit ? -1 : 0;
+}
+
+static const short ll_def[36] = { 4, 3, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 1, 1, 1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 3, 2, 1, 1, 1, 1, 1, -1, -1, -1, -1 };
+static const short ml_def[53] = { 1, 4, 3, 2, 2, 2, 2, 2, 2, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, -1, -1, -1, -1, -1, -1, -1 };
+static const short of_def[29] = { 1, 1, 1, 1, 1, 1, 2, 2, 2, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, -1, -1, -1, -1, -1 };
+static const unsigned ll_base[36] = { 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 18, 20, 22, 24, 28, 32, 40, 48, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536 };
+static const unsigned char ll_bits[36] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 3, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16 };
+static const unsigned ml_base[53] = { 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34,
+    35, 37, 39, 41, 43, 47, 51, 59, 67, 83, 99, 131, 259, 515, 1027, 2051, 4099, 8195, 16387, 32771, 65539 };
+static const unsigned char ml_bits[53] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    1, 1, 1, 1, 2, 2, 3, 3, 4, 4, 5, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16 };
+
+struct zst {
+    unsigned char *w, lit[131072 + 8], blk[131072 + 8];
+    size_t wn, cap, win, lim;
+    struct htab huf;
+    struct ftab ll, of, ml;
+    int hufok, llok, ofok, mlok;
+    uint64_t rep[3];
+};
+
+static int z_table(struct ftab *f, int *ok, int mode, const unsigned char **p, const unsigned char *end, const short *def, int ndef, int defal, int maxsym, int maxal)
+{
+    long k;
+    if (mode == 0) fse_build(f, def, ndef, defal);
+    else if (mode == 1) { if (*p >= end || **p > maxsym) return -1; fse_rle(f, *(*p)++); }
+    else if (mode == 2) { if ((k = fse_read(f, *p, end - *p, maxsym, maxal)) < 0) return -1; *p += k; }
+    else if (!*ok) return -1;
+    *ok = 1;
+    return 0;
+}
+
+static int z_block(struct zst *z, const unsigned char *p, size_t n)
+{
+    const unsigned char *end = p + n;
+    size_t nlit, csize = 0, i, li = 0;
+    int type, sf, nseq, modes;
+    if (!n) return -1;
+    type = p[0] & 3; sf = p[0] >> 2 & 3;
+    if (type < 2) {
+        if (sf == 1) { if (n < 2) return -1; nlit = (p[0] >> 4) + (p[1] << 4); p += 2; }
+        else if (sf == 3) { if (n < 3) return -1; nlit = (p[0] >> 4) + (p[1] << 4) + (p[2] << 12); p += 3; }
+        else { nlit = p[0] >> 3; p++; }
+        if (nlit > 131072 || (size_t)(end - p) < (type ? 1 : nlit)) return -1;
+        if (type) { memset(z->lit, *p, nlit); p++; } else { memcpy(z->lit, p, nlit); p += nlit; }
+    } else {
+        int streams = sf ? 4 : 1;
+        uint32_t h;
+        if (sf < 2) { if (n < 3) return -1; h = p[0] | p[1] << 8 | p[2] << 16; nlit = h >> 4 & 0x3ff; csize = h >> 14 & 0x3ff; p += 3; }
+        else if (sf == 2) { if (n < 4) return -1; h = p[0] | p[1] << 8 | p[2] << 16 | (uint32_t)p[3] << 24; nlit = h >> 4 & 0x3fff; csize = h >> 18; p += 4; }
+        else { if (n < 5) return -1; h = p[0] | p[1] << 8 | p[2] << 16 | (uint32_t)p[3] << 24; nlit = h >> 4 & 0x3ffff; csize = (h >> 22) | p[4] << 10; p += 5; }
+        if (nlit > 131072 || (size_t)(end - p) < csize) return -1;
+        {
+            const unsigned char *q = p, *qe = p + csize;
+            p += csize;
+            if (type == 2) { long k = huf_read(&z->huf, q, csize); if (k < 0) return -1; q += k; z->hufok = 1; }
+            else if (!z->hufok) return -1;
+            if (streams == 1) { if (huf_stream(&z->huf, q, qe - q, z->lit, nlit)) return -1; }
+            else {
+                size_t s[4], each = (nlit + 3) / 4, at = 0;
+                int j;
+                if (qe - q < 6) return -1;
+                s[0] = q[0] | q[1] << 8; s[1] = q[2] | q[3] << 8; s[2] = q[4] | q[5] << 8;
+                q += 6;
+                if (s[0] + s[1] + s[2] > (size_t)(qe - q)) return -1;
+                s[3] = (qe - q) - s[0] - s[1] - s[2];
+                for (j = 0; j < 4; j++) {
+                    size_t c = j < 3 ? each : nlit - 3 * each;
+                    if (j == 3 && 3 * each > nlit) return -1;
+                    if (huf_stream(&z->huf, q, s[j], z->lit + at, c)) return -1;
+                    q += s[j]; at += c;
+                }
+            }
+        }
+    }
+    if (p >= end) return -1;
+    nseq = *p++;
+    if (nseq >= 128) {
+        if (p >= end) return -1;
+        if (nseq < 255) nseq = ((nseq - 128) << 8) + *p++;
+        else { if (end - p < 2) return -1; nseq = p[0] + (p[1] << 8) + 0x7f00; p += 2; }
+    }
+    if (nseq) {
+        struct rb b;
+        int sl, so, sm;
+        if (p >= end) return -1;
+        modes = *p++;
+        if (z_table(&z->ll, &z->llok, modes >> 6, &p, end, ll_def, 36, 6, 35, 9) ||
+            z_table(&z->of, &z->ofok, modes >> 4 & 3, &p, end, of_def, 29, 5, 31, 8) ||
+            z_table(&z->ml, &z->mlok, modes >> 2 & 3, &p, end, ml_def, 53, 6, 52, 9) ||
+            rb_init(&b, p, end - p)) return -1;
+        sl = rb_get(&b, z->ll.al); so = rb_get(&b, z->of.al); sm = rb_get(&b, z->ml.al);
+        while (nseq--) {
+            int oc = z->of.t[so].sym, mc = z->ml.t[sm].sym, lc = z->ll.t[sl].sym;
+            uint64_t off, ml, ll;
+            if (oc > 31 || mc > 52 || lc > 35) return -1;
+            off = ((uint64_t)1 << oc) + rb_get(&b, oc);
+            ml = ml_base[mc] + rb_get(&b, ml_bits[mc]);
+            ll = ll_base[lc] + rb_get(&b, ll_bits[lc]);
+            if (off > 3) { z->rep[2] = z->rep[1]; z->rep[1] = z->rep[0]; z->rep[0] = off -= 3; }
+            else {
+                int k = off - 1 + !ll;
+                if (k) {
+                    off = k == 3 ? z->rep[0] - 1 : z->rep[k];
+                    if (k > 1) z->rep[2] = z->rep[1];
+                    z->rep[1] = z->rep[0]; z->rep[0] = off;
+                } else off = z->rep[0];
+            }
+            if (nseq) {
+                sl = z->ll.t[sl].base + rb_get(&b, z->ll.t[sl].nb);
+                sm = z->ml.t[sm].base + rb_get(&b, z->ml.t[sm].nb);
+                so = z->of.t[so].base + rb_get(&b, z->of.t[so].nb);
+            }
+            if (li + ll > nlit || z->wn + ll + ml > z->lim) return -1;
+            memcpy(z->w + z->wn, z->lit + li, ll);
+            z->wn += ll; li += ll;
+            if (off > z->wn) return -1;
+            for (i = 0; i < ml; i++, z->wn++) z->w[z->wn] = z->w[z->wn - off];
+        }
+        if (b.bit) return -1;
+    } else if (p != end) return -1;
+    if (z->wn + nlit - li > z->lim) return -1;
+    memcpy(z->w + z->wn, z->lit + li, nlit - li);
+    z->wn += nlit - li;
+    return 0;
+}
+
+static int unzstd(struct in *r, outfn *out, void *ctx)
+{
+    struct zst *z = xmalloc(sizeof *z);
+    int c, bad = -1, frames = 0;
+    memset(z, 0, sizeof *z);
+    for (;;) {
+        uint32_t magic = 0;
+        uint64_t fcs = 0;
+        int i, fhd, single, sum, did, fb, last;
+        if (frames && in_eof(r)) { bad = 0; break; }
+        for (i = 0; i < 4; i++) { if ((c = in_byte(r)) < 0) goto out; magic |= (uint32_t)c << (8 * i); }
+        frames++;
+        if ((magic & 0xfffffff0) == 0x184d2a50) {
+            uint32_t len = 0;
+            for (i = 0; i < 4; i++) { if ((c = in_byte(r)) < 0) goto out; len |= (uint32_t)c << (8 * i); }
+            while (len--) if (in_byte(r) < 0) goto out;
+            continue;
+        }
+        if (magic != 0xfd2fb528 || (fhd = in_byte(r)) < 0 || fhd & 8) goto out;
+        single = fhd >> 5 & 1; sum = fhd >> 2 & 1;
+        if (!single) {
+            int wd = in_byte(r), e;
+            if (wd < 0 || (e = 10 + (wd >> 3)) > 31) goto out;
+            z->win = ((size_t)1 << e) + (((size_t)1 << e) >> 3) * (wd & 7);
+        }
+        did = (int[]){ 0, 1, 2, 4 }[fhd & 3];
+        while (did--) if (in_byte(r) < 0) goto out;
+        fb = (int[]){ single, 2, 4, 8 }[fhd >> 6];
+        for (i = 0; i < fb; i++) { if ((c = in_byte(r)) < 0) goto out; fcs |= (uint64_t)c << (8 * i); }
+        if (fb == 2) fcs += 256;
+        if (single) z->win = fcs;
+        if (z->win > (size_t)1 << 31) goto out;
+        if (z->cap < 2 * z->win + 3 * 131072) { free(z->w); z->cap = 2 * z->win + 3 * 131072; z->w = xmalloc(z->cap); }
+        z->wn = 0; z->rep[0] = 1; z->rep[1] = 4; z->rep[2] = 8;
+        z->hufok = z->llok = z->ofok = z->mlok = 0;
+        do {
+            uint32_t h = 0, size;
+            int type;
+            size_t done = z->wn;
+            for (i = 0; i < 3; i++) { if ((c = in_byte(r)) < 0) goto out; h |= (uint32_t)c << (8 * i); }
+            last = h & 1; type = h >> 1 & 3; size = h >> 3;
+            if (type == 3 || size > 131072) goto out;
+            if (z->wn + 131072 > z->cap) {
+                size_t keep = z->win < z->wn ? z->win : z->wn;
+                memmove(z->w, z->w + z->wn - keep, keep);
+                z->wn = done = keep;
+            }
+            z->lim = z->wn + 131072;
+            if (type == 1) {
+                if ((c = in_byte(r)) < 0) goto out;
+                memset(z->w + z->wn, c, size);
+                z->wn += size;
+            } else {
+                for (i = 0; (uint32_t)i < size; i++) { if ((c = in_byte(r)) < 0) goto out; z->blk[i] = c; }
+                if (type == 0) { memcpy(z->w + z->wn, z->blk, size); z->wn += size; }
+                else if (z_block(z, z->blk, size)) goto out;
+            }
+            if (z->wn > done) out(ctx, z->w + done, z->wn - done);
+        } while (!last);
+        if (sum) for (i = 0; i < 4; i++) if (in_byte(r) < 0) goto out;
+    }
+out:
+    free(z->w);
+    free(z);
+    return bad;
 }
 
 struct buf { unsigned char *p; size_t n, cap; };
@@ -760,33 +1167,23 @@ static int der(const unsigned char **p, const unsigned char *end, int tag, size_
     return 0;
 }
 
-/* a pkcs#1 v1.5 signature over digest, checked with the public key in keyfile (pem) */
-static int rsa_verify(const char *keyfile, const unsigned char *sig, size_t siglen, const unsigned char *digest, int sha1)
+/* a pkcs#1 v1.5 signature over digest with the key n, e; kind 1 sha1, 0 sha256, 2 sha512 */
+static int rsa_check(const unsigned char *nb, size_t nlen, const unsigned char *eb, size_t elen, const unsigned char *sig, size_t siglen, const unsigned char *digest, int kind)
 {
     static const unsigned char info1[] = { 0x30, 0x21, 0x30, 0x09, 0x06, 0x05, 0x2b, 0x0e, 0x03, 0x02, 0x1a, 0x05, 0x00, 0x04, 0x14 };
     static const unsigned char info256[] = { 0x30, 0x31, 0x30, 0x0d, 0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x01, 0x05, 0x00, 0x04, 0x20 };
-    const unsigned char *info = sha1 ? info1 : info256;
-    size_t ilen = sha1 ? sizeof info1 : sizeof info256, dlen = sha1 ? 20 : 32, len, nlen, elen, k, i;
+    static const unsigned char info512[] = { 0x30, 0x51, 0x30, 0x0d, 0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x03, 0x05, 0x00, 0x04, 0x40 };
+    const unsigned char *info = kind == 1 ? info1 : kind == 2 ? info512 : info256;
+    size_t ilen = kind == 1 ? sizeof info1 : kind == 2 ? sizeof info512 : sizeof info256, dlen = kind == 1 ? 20 : kind == 2 ? 64 : 32, k, i;
     unsigned n[LIMBS + 1], s[LIMBS + 1], r[LIMBS + 1], ev = 0;
-    unsigned char derbuf[4096], em[LIMBS * 4];
-    const unsigned char *p = derbuf, *end, *nb, *eb;
-    char *pem = slurp(keyfile, NULL), *b, *e;
+    unsigned char em[LIMBS * 4];
     int top, bit;
-    if (!pem || !(b = strstr(pem, "KEY-----")) || !(e = strstr(b, "-----END")) || (size_t)(e - b) * 3 / 4 > sizeof derbuf) { free(pem); return -1; }
-    *e = 0;
-    end = derbuf + unbase64(b + 8, derbuf);
-    free(pem);
-    if (der(&p, end, 0x30, &len) || der(&p, end, 0x30, &len)) return -1;
-    p += len;
-    if (der(&p, end, 0x03, &len) || ++p > end || der(&p, end, 0x30, &len)) return -1;
-    if (der(&p, end, 0x02, &nlen)) return -1;
-    nb = p; p += nlen;
-    if (der(&p, end, 0x02, &elen) || elen > 4) return -1;
-    eb = p;
     while (nlen && !*nb) nb++, nlen--;
+    while (siglen > nlen && !*sig) sig++, siglen--;
     k = nlen;
-    if (siglen != k || big_from(n, nb, nlen) || big_from(s, sig, siglen) || !big_less(s, n)) return -1;
+    if (elen > 4 || siglen > k || big_from(n, nb, nlen) || big_from(s, sig, siglen) || !big_less(s, n)) return -1;
     for (i = 0; i < elen; i++) ev = ev << 8 | eb[i];
+    if (!ev) return -1;
     for (top = 31; top > 0 && !(ev >> top & 1); top--) {}
     memcpy(r, s, sizeof r);
     for (bit = top - 1; bit >= 0; bit--) {
@@ -800,55 +1197,254 @@ static int rsa_verify(const char *keyfile, const unsigned char *sig, size_t sigl
     return 0;
 }
 
-/* ---- sha512 and ed25519, for the signify signatures of port trees ---- */
+/* a pkcs#1 v1.5 signature over digest, checked with the public key in keyfile (pem) */
+static int rsa_verify(const char *keyfile, const unsigned char *sig, size_t siglen, const unsigned char *digest, int sha1)
+{
+    unsigned char derbuf[4096];
+    const unsigned char *p = derbuf, *end, *nb;
+    size_t len, nlen, elen;
+    char *pem = slurp(keyfile, NULL), *b, *e;
+    if (!pem || !(b = strstr(pem, "KEY-----")) || !(e = strstr(b, "-----END")) || (size_t)(e - b) * 3 / 4 > sizeof derbuf) { free(pem); return -1; }
+    *e = 0;
+    end = derbuf + unbase64(b + 8, derbuf);
+    free(pem);
+    if (der(&p, end, 0x30, &len) || der(&p, end, 0x30, &len)) return -1;
+    p += len;
+    if (der(&p, end, 0x03, &len) || ++p > end || der(&p, end, 0x30, &len)) return -1;
+    if (der(&p, end, 0x02, &nlen)) return -1;
+    nb = p; p += nlen;
+    if (der(&p, end, 0x02, &elen)) return -1;
+    {
+        size_t k = nlen;
+        const unsigned char *q = nb;
+        while (k && !*q) q++, k--;
+        if (siglen != k) return -1;
+    }
+    return rsa_check(nb, nlen, p, elen, sig, siglen, digest, sha1);
+}
 
-static const uint64_t k512[80] = {
-    0x428a2f98d728ae22ull, 0x7137449123ef65cdull, 0xb5c0fbcfec4d3b2full, 0xe9b5dba58189dbbcull, 0x3956c25bf348b538ull, 0x59f111f1b605d019ull,
-    0x923f82a4af194f9bull, 0xab1c5ed5da6d8118ull, 0xd807aa98a3030242ull, 0x12835b0145706fbeull, 0x243185be4ee4b28cull, 0x550c7dc3d5ffb4e2ull,
-    0x72be5d74f27b896full, 0x80deb1fe3b1696b1ull, 0x9bdc06a725c71235ull, 0xc19bf174cf692694ull, 0xe49b69c19ef14ad2ull, 0xefbe4786384f25e3ull,
-    0x0fc19dc68b8cd5b5ull, 0x240ca1cc77ac9c65ull, 0x2de92c6f592b0275ull, 0x4a7484aa6ea6e483ull, 0x5cb0a9dcbd41fbd4ull, 0x76f988da831153b5ull,
-    0x983e5152ee66dfabull, 0xa831c66d2db43210ull, 0xb00327c898fb213full, 0xbf597fc7beef0ee4ull, 0xc6e00bf33da88fc2ull, 0xd5a79147930aa725ull,
-    0x06ca6351e003826full, 0x142929670a0e6e70ull, 0x27b70a8546d22ffcull, 0x2e1b21385c26c926ull, 0x4d2c6dfc5ac42aedull, 0x53380d139d95b3dfull,
-    0x650a73548baf63deull, 0x766a0abb3c77b2a8ull, 0x81c2c92e47edaee6ull, 0x92722c851482353bull, 0xa2bfe8a14cf10364ull, 0xa81a664bbc423001ull,
-    0xc24b8b70d0f89791ull, 0xc76c51a30654be30ull, 0xd192e819d6ef5218ull, 0xd69906245565a910ull, 0xf40e35855771202aull, 0x106aa07032bbd1b8ull,
-    0x19a4c116b8d2d0c8ull, 0x1e376c085141ab53ull, 0x2748774cdf8eeb99ull, 0x34b0bcb5e19b48a8ull, 0x391c0cb3c5c95a63ull, 0x4ed8aa4ae3418acbull,
-    0x5b9cca4f7763e373ull, 0x682e6ff3d6b2b8a3ull, 0x748f82ee5defb2fcull, 0x78a5636f43172f60ull, 0x84c87814a1f0ab72ull, 0x8cc702081a6439ecull,
-    0x90befffa23631e28ull, 0xa4506cebde82bde9ull, 0xbef9a3f7b2c67915ull, 0xc67178f2e372532bull, 0xca273eceea26619cull, 0xd186b8c721c0c207ull,
-    0xeada7dd6cde0eb1eull, 0xf57d4f7fee6ed178ull, 0x06f067aa72176fbaull, 0x0a637dc5a2c898a6ull, 0x113f9804bef90daeull, 0x1b710b35131c471bull,
-    0x28db77f523047d84ull, 0x32caab7b40c72493ull, 0x3c9ebe0a15c9bebcull, 0x431d67c49c100d4cull, 0x4cc5d4becb3e42b6ull, 0x597f299cfc657e2aull,
-    0x5fcb6fab3ad6faecull, 0x6c44198c4a475817ull };
+/* ---- OpenPGP, for pacman repos: rsa keys from keyrings, v4 signatures over a whole file ---- */
 
-#define ROR64(x, n) ((x) >> (n) | (x) << (64 - (n)))
+struct pgpkey { unsigned char fp[20]; const unsigned char *n, *e; size_t nl, el; int algo; };
+static struct pgpkey *pgpkeys;
+static int npgpkeys, pgploaded;
+
+/* one packet: its tag and body, or -1 */
+static int pgp_packet(const unsigned char **p, const unsigned char *end, const unsigned char **body, size_t *len)
+{
+    const unsigned char *q = *p;
+    int c, tag;
+    size_t n = 0;
+    if (q >= end || !(*q & 0x80)) return -1;
+    c = *q++;
+    if (c & 0x40) {
+        tag = c & 63;
+        if (q >= end) return -1;
+        if (*q < 192) n = *q++;
+        else if (*q < 224) { if (end - q < 2) return -1; n = ((q[0] - 192) << 8) + q[1] + 192; q += 2; }
+        else if (*q == 255) { if (end - q < 5) return -1; n = (size_t)q[1] << 24 | q[2] << 16 | q[3] << 8 | q[4]; q += 5; }
+        else return -1;
+    } else {
+        int lt = c & 3, i;
+        tag = c >> 2 & 15;
+        if (lt == 3) n = end - q;
+        else {
+            if (end - q < (1 << lt)) return -1;
+            for (i = 0; i < 1 << lt; i++) n = n << 8 | *q++;
+        }
+    }
+    if ((size_t)(end - q) < n) return -1;
+    *body = q; *len = n; *p = q + n;
+    return tag;
+}
+
+static int mpi(const unsigned char **p, const unsigned char *end, const unsigned char **v, size_t *n)
+{
+    size_t bits;
+    if (end - *p < 2) return -1;
+    bits = (*p)[0] << 8 | (*p)[1];
+    *n = (bits + 7) / 8;
+    if ((size_t)(end - *p - 2) < *n) return -1;
+    *v = *p + 2;
+    *p += 2 + *n;
+    return 0;
+}
+
+/* the binary packets of an armored keyring, every block of it */
+static unsigned char *dearmor(char *t, size_t *n)
+{
+    unsigned char *out = xmalloc(strlen(t) + 1);
+    char *s = t, *e;
+    size_t o = 0;
+    while ((s = strstr(s, "-----BEGIN PGP"))) {
+        if (!(s = strstr(s, "\n\n")) && !(s = strstr(s, "\n\r\n"))) break;
+        s += 2;
+        for (; *s && *s != '=' && *s != '-'; s = e) {
+            char c;
+            e = s + strcspn(s, "\n");
+            c = *e; *e = 0;
+            o += unbase64(s, out + o);
+            *e = c;
+            if (*e) e++;
+        }
+    }
+    *n = o;
+    return out;
+}
+
+static void pgp_keyring(const char *file, const struct list *revoked)
+{
+    size_t n;
+    unsigned char *t = (unsigned char *)slurp(file, &n);
+    if (t && n > 10 && !memcmp(t, "-----", 5)) { unsigned char *b = dearmor((char *)t, &n); free(t); t = b; }
+    const unsigned char *p = t, *end = t + (t ? n : 0), *b;
+    size_t len;
+    int tag;
+    while (t && (tag = pgp_packet(&p, end, &b, &len)) >= 0) {
+        struct pgpkey k;
+        struct hash h;
+        unsigned char hd[3] = { 0x99, len >> 8, len };
+        const unsigned char *q = b + 6;
+        char *fp;
+        if ((tag != 6 && tag != 14) || len < 8 || b[0] != 4) continue;
+        if (b[5] >= 1 && b[5] <= 3) {
+            if (mpi(&q, b + len, &k.n, &k.nl) || mpi(&q, b + len, &k.e, &k.el)) continue;
+            k.algo = 1;
+        } else if (b[5] == 22) {
+            /* ed25519: its oid, then the point as 0x40 and 32 bytes */
+            if (q >= b + len || q + 1 + *q > b + len || *q != 9 || memcmp(q + 1, "\x2b\x06\x01\x04\x01\xda\x47\x0f\x01", 9)) continue;
+            q += 1 + *q;
+            if (mpi(&q, b + len, &k.n, &k.nl) || k.nl != 33 || k.n[0] != 0x40) continue;
+            k.n++; k.nl = 32; k.e = NULL; k.el = 0;
+            k.algo = 22;
+        } else continue;
+        hash_init(&h, 1);
+        hash_add(&h, hd, 3);
+        hash_add(&h, b, len);
+        hash_end(&h, k.fp);
+        fp = hex(k.fp, 20);
+        for (tag = 0; tag < revoked->n && strcasecmp(revoked->v[tag], fp); tag++) {}
+        free(fp);
+        if (tag < revoked->n) continue;
+        if (npgpkeys % 64 == 0) pgpkeys = xrealloc(pgpkeys, (npgpkeys + 64) * sizeof *pgpkeys);
+        pgpkeys[npgpkeys++] = k;
+    }
+}
+
+static char *confdir(void);
+static int ed25519_ok(const unsigned char *sig, const unsigned char *pk, const char *m, size_t n);
+
+/* the .gpg keyrings in mag's keys and the ones packages put in /usr/share/pacman/keyrings, without the revoked keys */
+static void pgp_load(void)
+{
+    char *dirs[2], *rev = fmt("%s/usr/share/pacman/keyrings", root), *c = confdir();
+    struct list revoked = { 0 };
+    int i;
+    DIR *d;
+    struct dirent *e;
+    if (pgploaded++) return;
+    dirs[0] = fmt("%s/keys", c); dirs[1] = rev;
+    free(c);
+    if ((d = opendir(rev))) {
+        while ((e = readdir(d))) {
+            size_t l = strlen(e->d_name);
+            char *f, *t, *line, *next;
+            if (l < 8 || strcmp(e->d_name + l - 8, "-revoked")) continue;
+            f = fmt("%s/%s", rev, e->d_name);
+            for (line = t = slurp(f, NULL); line && *line; line = next) {
+                next = strchr(line, '\n');
+                if (next) *next++ = 0;
+                if (*line) push(&revoked, xstrdup(line));
+            }
+            free(t); free(f);
+        }
+        closedir(d);
+    }
+    for (i = 0; i < 2; i++) {
+        if (!(d = opendir(dirs[i]))) continue;
+        while ((e = readdir(d))) {
+            size_t l = strlen(e->d_name);
+            if (l > 4 && !strcmp(e->d_name + l - 4, ".gpg")) { char *f = fmt("%s/%s", dirs[i], e->d_name); pgp_keyring(f, &revoked); free(f); }
+        }
+        closedir(d);
+    }
+    list_free(&revoked);
+    free(dirs[0]); free(dirs[1]);
+}
+
+/* sig is a binary OpenPGP signature of the file: 0 good, -1 bad, 1 no key for it */
+static int pgp_verify(const char *file, const unsigned char *sig, size_t siglen)
+{
+    const unsigned char *p = sig, *b, *q, *issuer = NULL, *v;
+    size_t len, hl, ul, vl;
+    unsigned char dig[64], tr[6];
+    struct hash h;
+    int tag, kind, i, area, fd;
+    off_t n;
+    static unsigned char buf[65536];
+    ssize_t r;
+    if ((tag = pgp_packet(&p, sig + siglen, &b, &len)) != 2 || len < 12 || b[0] != 4 || b[1] != 0 || (b[2] != 1 && b[2] != 22)) return -1;
+    kind = b[3] == 8 ? 0 : b[3] == 10 ? 2 : -1;
+    if (kind < 0) return -1;
+    hl = b[4] << 8 | b[5];
+    if (6 + hl + 2 > len) return -1;
+    ul = b[6 + hl] << 8 | b[7 + hl];
+    if (8 + hl + ul + 2 > len) return -1;
+    for (area = 0; area < 2 && !issuer; area++) {
+        const unsigned char *s = area ? b + 8 + hl : b + 6, *se = s + (area ? ul : hl);
+        while (s < se && !issuer) {
+            size_t sl;
+            if (*s < 192) sl = *s++;
+            else if (*s < 255) { if (se - s < 2) break; sl = ((s[0] - 192) << 8) + s[1] + 192; s += 2; }
+            else { if (se - s < 5) break; sl = (size_t)s[1] << 24 | s[2] << 16 | s[3] << 8 | s[4]; s += 5; }
+            if (!sl || (size_t)(se - s) < sl) break;
+            if ((s[0] & 127) == 33 && sl == 22 && s[1] == 4) issuer = s + 2;
+            s += sl;
+        }
+    }
+    q = b + 8 + hl + ul + 2;
+    if (mpi(&q, b + len, &v, &vl)) return -1;
+    pgp_load();
+    for (i = 0; i < npgpkeys && (!issuer || memcmp(pgpkeys[i].fp, issuer, 20) || pgpkeys[i].algo != (b[2] == 22 ? 22 : 1)); i++) {}
+    if (i == npgpkeys) {
+        /* no fingerprint subpacket: the 8 byte key id instead */
+        const unsigned char *s = b + 8 + hl, *se = s + ul;
+        const unsigned char *id = NULL;
+        while (s + 2 <= se && !id) { size_t sl = *s++; if (sl >= 192 || (size_t)(se - s) < sl) break; if ((s[0] & 127) == 16 && sl == 9) id = s + 1; s += sl; }
+        for (i = 0; id && i < npgpkeys && memcmp(pgpkeys[i].fp + 12, id, 8); i++) {}
+        if (!id || i == npgpkeys) return 1;
+    }
+    if ((fd = open(file, O_RDONLY)) < 0) return -1;
+    hash_init(&h, kind);
+    while ((r = read(fd, buf, sizeof buf)) > 0) hash_add(&h, buf, r);
+    close(fd);
+    hash_add(&h, b, 6 + hl);
+    n = 6 + hl;
+    tr[0] = 4; tr[1] = 0xff; tr[2] = n >> 24; tr[3] = n >> 16; tr[4] = n >> 8; tr[5] = n;
+    hash_add(&h, tr, 6);
+    hash_end(&h, dig);
+    if (dig[0] != b[6 + hl + 2 + ul] || dig[1] != b[6 + hl + 3 + ul]) return -1;
+    if (pgpkeys[i].algo == 22) {
+        unsigned char rs[64];
+        const unsigned char *w;
+        size_t wl;
+        if (vl > 32 || mpi(&q, b + len, &w, &wl) || wl > 32) return -1;
+        memset(rs, 0, 64);
+        memcpy(rs + 32 - vl, v, vl);
+        memcpy(rs + 64 - wl, w, wl);
+        return ed25519_ok(rs, pgpkeys[i].n, (const char *)dig, kind == 2 ? 64 : 32) ? 0 : -1;
+    }
+    return rsa_check(pgpkeys[i].n, pgpkeys[i].nl, pgpkeys[i].e, pgpkeys[i].el, v, vl, dig, kind) ? -1 : 0;
+}
+
+/* ---- ed25519, for the signify signatures of port trees ---- */
 
 static void sha512(const unsigned char *m, size_t n, unsigned char *out)
 {
-    static const uint64_t iv[8] = { 0x6a09e667f3bcc908ull, 0xbb67ae8584caa73bull, 0x3c6ef372fe94f82bull, 0xa54ff53a5f1d36f1ull,
-        0x510e527fade682d1ull, 0x9b05688c2b3e6c1full, 0x1f83d9abfb41bd6bull, 0x5be0cd19137e2179ull };
-    size_t len = (n + 17 + 127) / 128 * 128, b;
-    unsigned char *p = xmalloc(len);
-    uint64_t h[8], w[80], v[8];
-    int i, j;
-    memset(p, 0, len);
-    memcpy(p, m, n);
-    p[n] = 0x80;
-    for (j = 0; j < 8; j++) p[len - 1 - j] = (uint64_t)n * 8 >> (8 * j);
-    memcpy(h, iv, sizeof h);
-    for (b = 0; b < len; b += 128) {
-        for (j = 0; j < 16; j++) for (w[j] = 0, i = 0; i < 8; i++) w[j] = w[j] << 8 | p[b + j * 8 + i];
-        for (j = 16; j < 80; j++)
-            w[j] = w[j - 16] + (ROR64(w[j - 15], 1) ^ ROR64(w[j - 15], 8) ^ w[j - 15] >> 7) + w[j - 7] + (ROR64(w[j - 2], 19) ^ ROR64(w[j - 2], 61) ^ w[j - 2] >> 6);
-        memcpy(v, h, sizeof v);
-        for (j = 0; j < 80; j++) {
-            uint64_t t1 = v[7] + (ROR64(v[4], 14) ^ ROR64(v[4], 18) ^ ROR64(v[4], 41)) + ((v[4] & v[5]) ^ (~v[4] & v[6])) + k512[j] + w[j];
-            uint64_t t2 = (ROR64(v[0], 28) ^ ROR64(v[0], 34) ^ ROR64(v[0], 39)) + ((v[0] & v[1]) ^ (v[0] & v[2]) ^ (v[1] & v[2]));
-            memmove(v + 1, v, 7 * sizeof *v);
-            v[4] += t1;
-            v[0] = t1 + t2;
-        }
-        for (j = 0; j < 8; j++) h[j] += v[j];
-    }
-    for (j = 0; j < 64; j++) out[j] = h[j / 8] >> (56 - 8 * (j % 8));
-    free(p);
+    struct hash h;
+    hash_init(&h, 2);
+    hash_add(&h, m, n);
+    hash_end(&h, out);
 }
 
 /* the field and curve of ed25519 the way tweetnacl does them: 16 limbs of 16 bits */
@@ -1048,7 +1644,7 @@ static int ed25519_ok(const unsigned char *sig, const unsigned char *pk, const c
 
 /* ---- the repos ---- */
 
-struct pkg { char *name, *ver, *desc, *csum, *deps, *prov, *size, *iif; int prio, repo; };
+struct pkg { char *name, *ver, *desc, *csum, *deps, *prov, *size, *iif, *file, *sig, *mdeps, *base; int prio, repo; };
 struct prov { char *key, *ver; struct pkg *p; };
 
 static struct pkg *pkgs;
@@ -1057,8 +1653,11 @@ static struct prov *provs;
 static int nprovs;
 static struct list repo_urls;
 static int *kinds;
-enum { APK, CRUX, VOID, EXHERBO };
-static const char *const kind_name[] = { "", "crux", "void", "exherbo" };
+enum { APK, CRUX, VOID, EXHERBO, PACMAN, AUR };
+static const char *const kind_name[] = { "", "crux", "void", "exherbo", "pacman", "aur" };
+#define BUILT(k) ((k) != APK && (k) != PACMAN)
+/* pacman's version order once a repo is a pacman one: a machine is one or the other */
+static int alpm_order;
 
 static char *confdir(void)
 {
@@ -1099,13 +1698,14 @@ static void load_repos(void)
         if (!*line || *line == '#') continue;
         kinds = xrealloc(kinds, (repo_urls.n + 1) * sizeof *kinds);
         kinds[repo_urls.n] = APK;
-        for (k = CRUX; k <= EXHERBO; k++) {
+        for (k = CRUX; k <= AUR; k++) {
             size_t n = strlen(kind_name[k]);
             if (!strncmp(line, kind_name[k], n) && (line[n] == ' ' || line[n] == '\t')) {
                 for (kinds[repo_urls.n] = k, line += n; *line == ' ' || *line == '\t'; line++) {}
                 break;
             }
         }
+        if (kinds[repo_urls.n] >= PACMAN) alpm_order = 1;
         push(&repo_urls, xstrdup(line));
     }
     free(t); free(f); free(d);
@@ -1246,6 +1846,10 @@ static void parse_index(char *t, int repo)
         case 'S': p.size = line + 2; break;
         case 'i': p.iif = line + 2; break;
         case 'k': p.prio = atoi(line + 2); break;
+        case 'F': p.file = line + 2; break;
+        case 'G': p.sig = line + 2; break;
+        case 'M': p.mdeps = line + 2; break;
+        case 'B': p.base = line + 2; break;
         }
     }
 }
@@ -1315,8 +1919,59 @@ static int vclass(const char *s)
     return 3;
 }
 
+/* rpm's order, the way pacman has it: alphanumeric runs compared, numbers as numbers, letters below numbers */
+static int rpmcmp(const char *a, const char *b, const char *ae, const char *be)
+{
+    while (a < ae && b < be) {
+        const char *x, *y;
+        int num, c;
+        size_t sa = 0, sb = 0;
+        while (a < ae && !isalnum(*a)) a++, sa++;
+        while (b < be && !isalnum(*b)) b++, sb++;
+        if (a == ae || b == be) break;
+        if (sa != sb) return sa < sb ? -1 : 1;
+        x = a; y = b;
+        if ((num = isdigit(*a))) { while (a < ae && isdigit(*a)) a++; while (b < be && isdigit(*b)) b++; }
+        else { while (a < ae && isalpha(*a)) a++; while (b < be && isalpha(*b)) b++; }
+        if (y == b) return num ? 1 : -1;
+        if (num) {
+            while (*x == '0' && x + 1 < a) x++;
+            while (*y == '0' && y + 1 < b) y++;
+            if (a - x != b - y) return a - x < b - y ? -1 : 1;
+        }
+        {
+            size_t la = a - x, lb = b - y;
+            c = strncmp(x, y, la < lb ? la : lb);
+            if (!c && la != lb) c = la < lb ? -1 : 1;
+        }
+        if (c) return c < 0 ? -1 : 1;
+    }
+    if (a == ae && b == be) return 0;
+    return (a == ae && !isalpha(*b)) || (a < ae && isalpha(*a)) ? -1 : 1;
+}
+
+/* pacman's: epoch:version-release, the release only when both have one */
+static int alpm_vercmp(const char *a, const char *b)
+{
+    const char *ca = strchr(a, ':'), *cb = strchr(b, ':'), *ra, *rb, *ea = a + strlen(a), *eb = b + strlen(b);
+    long xa = 0, xb = 0;
+    int c;
+    if (!strcmp(a, b)) return 0;
+    if (ca) { for (const char *s = a; s < ca; s++) if (!isdigit(*s)) { ca = NULL; break; } }
+    if (cb) { for (const char *s = b; s < cb; s++) if (!isdigit(*s)) { cb = NULL; break; } }
+    if (ca) { xa = strtol(a, NULL, 10); a = ca + 1; }
+    if (cb) { xb = strtol(b, NULL, 10); b = cb + 1; }
+    if (xa != xb) return xa < xb ? -1 : 1;
+    ra = strrchr(a, '-'); rb = strrchr(b, '-');
+    if ((c = rpmcmp(a, b, ra ? ra : ea, rb ? rb : eb))) return c;
+    return ra && rb ? rpmcmp(ra + 1, rb + 1, ea, eb) : 0;
+}
+
+static int apk_vercmp(const char *a, const char *b);
+static int vercmp(const char *a, const char *b) { return alpm_order ? alpm_vercmp(a, b) : apk_vercmp(a, b); }
+
 /* apk's order: 1.2_rc1 < 1.2 < 1.2-r1 < 1.2_p1 < 1.2a < 1.2.1 */
-static int vercmp(const char *a, const char *b)
+static int apk_vercmp(const char *a, const char *b)
 {
     for (;;) {
         if (isdigit(*a) && isdigit(*b)) {
@@ -1429,7 +2084,8 @@ static struct pkg *pick(const struct dep *d)
         named = has(&prefer, p->name) || installed(p->name); bnamed = has(&prefer, best->name) || installed(best->name);
         if (named != bnamed) { if (named) best = p; continue; }
         if (p->prio != best->prio) { if (p->prio > best->prio) best = p; continue; }
-        if (!strcmp(p->name, best->name) ? vercmp(p->ver, best->ver) > 0 : p->repo < best->repo) best = p;
+        /* the same name in two repos: apk takes the newest, pacman the first repo that has it */
+        if (!strcmp(p->name, best->name) && !alpm_order ? vercmp(p->ver, best->ver) > 0 : p->repo < best->repo) best = p;
     }
     return best;
 }
@@ -1442,7 +2098,7 @@ static struct pkg *port_of(const char *name)
     struct pkg *best = NULL;
     int i;
     for (i = 0; i < npkgs; i++)
-        if (kinds[pkgs[i].repo] != APK && !strcmp(pkgs[i].name, name) && (!best || vercmp(pkgs[i].ver, best->ver) > 0)) best = &pkgs[i];
+        if (BUILT(kinds[pkgs[i].repo]) && !strcmp(pkgs[i].name, name) && (!best || vercmp(pkgs[i].ver, best->ver) > 0)) best = &pkgs[i];
     return best;
 }
 
@@ -1803,6 +2459,203 @@ static void triggers(const struct list *changed)
         free(args.v);
         free(t);
     }
+}
+
+/* ---- alpm hooks: what pacman runs around a transaction, from /usr/share/libalpm/hooks and /etc/pacman.d/hooks ---- */
+
+/* what a run did, for the hooks: "I path", "U path", "R path", and the same for packages */
+static struct list did_files, did_pkgs;
+
+static int alpm_match(const char *p, const char *s)
+{
+    if (!*p) return !*s;
+    if (*p == '*') return alpm_match(p + 1, s) || (*s && alpm_match(p, s + 1));
+    if (*p == '[') {
+        const char *q = p + 1;
+        int neg = *q == '!' || *q == '^', ok = 0;
+        for (q += neg; *q && (*q != ']' || q == p + 1 + neg); q++) {
+            if (q[1] == '-' && q[2] && q[2] != ']') { if (*s >= *q && *s <= q[2]) ok = 1; q += 2; }
+            else if (*q == *s) ok = 1;
+        }
+        return *q && *s && ok != neg && alpm_match(q + 1, s + 1);
+    }
+    return *s && (*p == '?' || *p == *s) && alpm_match(p + 1, s + 1);
+}
+
+struct trig { int ops, pkg; struct list targets; };
+struct hook { char *desc, *exec; int post, needs, ntrig; struct trig trig[8]; };
+
+static char *htrim(char *s)
+{
+    char *e;
+    while (*s == ' ' || *s == '\t') s++;
+    for (e = s + strlen(s); e > s && (e[-1] == ' ' || e[-1] == '\t' || e[-1] == '\r'); ) *--e = 0;
+    return s;
+}
+
+static int hook_read(const char *file, struct hook *h)
+{
+    char *t = slurp(file, NULL), *line, *next;
+    int sec = 0;
+    memset(h, 0, sizeof *h);
+    if (!t) return -1;
+    for (line = t; line; line = next) {
+        char *key, *val, *eq;
+        next = strchr(line, '\n');
+        if (next) *next++ = 0;
+        key = htrim(line);
+        if (!*key || *key == '#') continue;
+        if (!strcmp(key, "[Trigger]")) { sec = h->ntrig < 8 ? (h->ntrig++, 1) : 0; continue; }
+        if (!strcmp(key, "[Action]")) { sec = 2; continue; }
+        val = "";
+        if ((eq = strchr(key, '='))) { *eq = 0; val = htrim(eq + 1); key = htrim(key); }
+        if (sec == 1) {
+            struct trig *g = &h->trig[h->ntrig - 1];
+            if (!strcmp(key, "Operation")) g->ops |= !strcmp(val, "Install") ? 1 : !strcmp(val, "Upgrade") ? 2 : !strcmp(val, "Remove") ? 4 : 0;
+            else if (!strcmp(key, "Type")) g->pkg = !strcmp(val, "Package");
+            else if (!strcmp(key, "Target")) push(&g->targets, xstrdup(val));
+        } else if (sec == 2) {
+            if (!strcmp(key, "When")) h->post = !strcmp(val, "PostTransaction");
+            else if (!strcmp(key, "Exec")) { free(h->exec); h->exec = xstrdup(val); }
+            else if (!strcmp(key, "Description")) { free(h->desc); h->desc = xstrdup(val); }
+            else if (!strcmp(key, "NeedsTargets")) h->needs = 1;
+        }
+    }
+    free(t);
+    return h->exec && h->ntrig ? 0 : -1;
+}
+
+static void hook_free(struct hook *h)
+{
+    int i;
+    for (i = 0; i < h->ntrig; i++) list_free(&h->trig[i].targets);
+    free(h->desc); free(h->exec);
+}
+
+/* the first pattern that matches decides, a ! one against */
+static int hook_targets(const struct list *pats, const char *s)
+{
+    int i;
+    for (i = 0; i < pats->n; i++) {
+        const char *p = pats->v[i];
+        int neg = *p == '!';
+        if (alpm_match(p + neg, s)) return !neg;
+    }
+    return 0;
+}
+
+/* Exec split into words the way alpm does it: spaces, quotes and backslashes */
+static char **hook_argv(const char *s)
+{
+    char **av = xmalloc((strlen(s) / 2 + 2) * sizeof *av);
+    int n = 0;
+    while (*s) {
+        char *w = xmalloc(strlen(s) + 1), *o = w, q = 0;
+        while (*s == ' ' || *s == '\t') s++;
+        if (!*s) { free(w); break; }
+        for (; *s && (q || (*s != ' ' && *s != '\t')); s++) {
+            if (*s == '\\' && s[1] && q != '\'') { *o++ = *++s; continue; }
+            if (!q && (*s == '"' || *s == '\'')) { q = *s; continue; }
+            if (q && *s == q) { q = 0; continue; }
+            *o++ = *s;
+        }
+        *o = 0;
+        av[n++] = w;
+    }
+    av[n] = NULL;
+    return av;
+}
+
+/* runs av inside the root, the lines of in on its standard input */
+static int run_in_root(char **av, const struct list *in)
+{
+    int fd[2] = { -1, -1 }, i;
+    pid_t pid;
+    if (in && pipe(fd) < 0) die("cannot make a pipe");
+    fflush(stdout);
+    if ((pid = fork()) < 0) die("cannot fork");
+    if (!pid) {
+        if (in) { dup2(fd[0], 0); close(fd[0]); close(fd[1]); }
+        /* in the root's / like pacman: glibc's hook is ldconfig -r . */
+        if ((*root && chroot(root) < 0) || chdir("/") < 0) { fprintf(stderr, "%s: chroot %s: %s\n", prog, root, strerror(errno)); _exit(126); }
+        setenv("PATH", "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin", 1);
+        execvp(av[0], av);
+        fprintf(stderr, "%s: %s: %s\n", prog, av[0], strerror(errno));
+        _exit(127);
+    }
+    if (in) {
+        close(fd[0]);
+        for (i = 0; i < in->n; i++) if (write(fd[1], in->v[i], strlen(in->v[i])) < 0 || write(fd[1], "\n", 1) < 0) break;
+        close(fd[1]);
+    }
+    return wait_for(pid);
+}
+
+static int cmp_strp(const void *a, const void *b) { return strcmp(*(char *const *)a, *(char *const *)b); }
+
+static void run_hooks(int post)
+{
+    static const char *const where[] = { "/usr/share/libalpm/hooks", "/etc/pacman.d/hooks" };
+    struct list names = { 0 }, files = { 0 };
+    int i, j, k;
+    if (!did_files.n && !did_pkgs.n) return;
+    for (i = 0; i < 2; i++) {
+        char *d = fmt("%s%s", root, where[i]);
+        DIR *dir = opendir(d);
+        struct dirent *e;
+        while (dir && (e = readdir(dir))) {
+            size_t l = strlen(e->d_name);
+            char *f;
+            if (l < 6 || strcmp(e->d_name + l - 5, ".hook")) continue;
+            f = fmt("%s/%s", d, e->d_name);
+            for (j = 0; j < names.n && strcmp(names.v[j], e->d_name); j++) {}
+            if (j < names.n) { free(files.v[j]); files.v[j] = f; }
+            else { push(&names, xstrdup(e->d_name)); push(&files, f); }
+        }
+        if (dir) closedir(dir);
+        free(d);
+    }
+    for (i = 0; i < names.n; i++) {
+        for (j = i + 1; j < names.n; j++)
+            if (strcmp(names.v[j], names.v[i]) < 0) { char *t = names.v[i]; names.v[i] = names.v[j]; names.v[j] = t; t = files.v[i]; files.v[i] = files.v[j]; files.v[j] = t; }
+    }
+    for (i = 0; i < names.n; i++) {
+        struct hook h;
+        struct list hit = { 0 };
+        char lnk[16];
+        ssize_t ln = readlink(files.v[i], lnk, sizeof lnk - 1);
+        if (ln == 9 && !strncmp(lnk, "/dev/null", 9)) continue;
+        if (hook_read(files.v[i], &h)) { hook_free(&h); continue; }
+        if (h.post == post)
+            for (j = 0; j < h.ntrig; j++) {
+                const struct list *did = h.trig[j].pkg ? &did_pkgs : &did_files;
+                for (k = 0; k < did->n; k++) {
+                    const char *e = did->v[k];
+                    int op = *e == 'I' ? 1 : *e == 'U' ? 2 : 4;
+                    if (h.trig[j].ops & op && hook_targets(&h.trig[j].targets, e + 2) && !has(&hit, e + 2)) push(&hit, xstrdup(e + 2));
+                }
+            }
+        if (hit.n) {
+            char **av = hook_argv(h.exec);
+            int rc;
+            if (hit.n > 1) qsort(hit.v, hit.n, sizeof *hit.v, cmp_strp);
+            printf("==> %s\n", h.desc ? h.desc : names.v[i]);
+            if (av[0] && (rc = run_in_root(av, h.needs ? &hit : NULL))) say("%s exited with %d", names.v[i], rc);
+            for (k = 0; av[k]; k++) free(av[k]);
+            free(av);
+        }
+        list_free(&hit);
+        hook_free(&h);
+    }
+    list_free(&names); list_free(&files);
+}
+
+/* after a run on a pacman machine, its hooks */
+static void after_run(void)
+{
+    if (!alpm_order) return;
+    run_hooks(1);
+    list_free(&did_files); list_free(&did_pkgs);
 }
 
 /* ---- port trees: CRUX ports, built here from their Pkgfile ---- */
@@ -2860,9 +3713,326 @@ static void build_tree(const struct pkg *p, const char *stage)
     free(dir); free(tree); free(work); free(cache); free(list); free(file);
 }
 
+/* ---- pacman repos (Artix, Arch): the database read into mag's index, packages checked against it and their signature ---- */
+
+static int unpack_any(struct in *r, outfn *out, void *ctx)
+{
+    int c = in_byte(r);
+    if (c < 0) return -1;
+    r->pos--;
+    return c == 0x1f ? gunzip(r, out, ctx) : c == 0x28 ? unzstd(r, out, ctx) : -1;
+}
+
+/* the database's name: .../system/os is system.db */
+static char *pac_name(int i)
+{
+    char *u = xstrdup(repo_urls.v[i]), *s = strrchr(u, '/'), *n;
+    if (s && !strcmp(s + 1, "os")) { *s = 0; s = strrchr(u, '/'); }
+    n = xstrdup(s ? s + 1 : u);
+    free(u);
+    return n;
+}
+
+static void field(struct buf *b, int k, const char *v)
+{
+    char h[2] = { k, ':' };
+    if (!v || !*v) return;
+    buf_add(b, h, 2); buf_add(b, v, strlen(v)); buf_add(b, "\n", 1);
+}
+
+static void pac_entry(struct buf *b, char *t)
+{
+    static const char *const keys[] = { "%NAME%", "%VERSION%", "%DESC%", "%FILENAME%", "%SHA256SUM%", "%PGPSIG%", "%ISIZE%", "%BASE%" };
+    char *line, *next, *key = "", *v[8] = { 0 };
+    struct buf deps = { 0 }, prov = { 0 };
+    int k;
+    for (line = t; line; line = next) {
+        next = strchr(line, '\n');
+        if (next) *next++ = 0;
+        if (*line == '%') { key = line; continue; }
+        if (!*line) continue;
+        for (k = 0; k < 8 && strcmp(key, keys[k]); k++) {}
+        if (k < 8) { if (!v[k]) v[k] = line; }
+        else if (!strcmp(key, "%DEPENDS%")) { buf_add(&deps, " ", 1); buf_add(&deps, line, strlen(line)); }
+        else if (!strcmp(key, "%CONFLICTS%")) { buf_add(&deps, " !", 2); buf_add(&deps, line, strlen(line)); }
+        else if (!strcmp(key, "%PROVIDES%")) { buf_add(&prov, " ", 1); buf_add(&prov, line, strlen(line)); }
+    }
+    if (v[0] && v[1] && v[3] && v[4]) {
+        field(b, 'P', v[0]); field(b, 'V', v[1]); field(b, 'T', v[2]); field(b, 'F', v[3]); field(b, 'C', v[4]);
+        field(b, 'G', v[5]); field(b, 'S', v[6]); field(b, 'B', v[7]);
+        if (deps.n) field(b, 'D', (char *)deps.p + 1);
+        if (prov.n) field(b, 'p', (char *)prov.p + 1);
+        buf_add(b, "\n", 1);
+    }
+    free(deps.p); free(prov.p);
+}
+
+static int sync_pacman(int i)
+{
+    char *name = pac_name(i), *base = repo_base(i), *url = fmt("%s/%s.db", base, name), *d = tree_dir(i), *db = fmt("%s/%s.db", d, name), *ix = fmt("%s/INDEX", d), *tmp = fmt("%s.new", ix);
+    struct in *r = xmalloc(sizeof *r);
+    struct tar t;
+    struct buf b = { 0 };
+    int fd = -1, bad = 1, j;
+    memset(&t, 0, sizeof t);
+    printf("==> %s\n", url);
+    mkpath(d, 0755);
+    if (download(url, db)) say("could not fetch %s", url);
+    else if ((fd = open(db, O_RDONLY)) >= 0) {
+        in_open(r, fd, 0);
+        if (unpack_any(r, tar_out, &t) || t.bad) say("%s is broken", url);
+        else {
+            for (j = 0; j < t.nents; j++) {
+                size_t l = strlen(t.ents[j].name);
+                if (l > 5 && !strcmp(t.ents[j].name + l - 5, "/desc") && t.ents[j].data.p) pac_entry(&b, (char *)t.ents[j].data.p);
+            }
+            db_put_file(tmp, b.n ? (char *)b.p : "");
+            bad = rename(tmp, ix) < 0;
+        }
+        close(fd);
+    }
+    tar_free(&t);
+    free(r); free(b.p); free(name); free(base); free(url); free(d); free(db); free(ix); free(tmp);
+    return bad;
+}
+
+static void ent_add(struct tar *t, char *name, char *data)
+{
+    t->ents = xrealloc(t->ents, (t->nents + 1) * sizeof *t->ents);
+    t->ents[t->nents].name = name;
+    memset(&t->ents[t->nents].data, 0, sizeof t->ents[t->nents].data);
+    buf_add(&t->ents[t->nents].data, data, strlen(data));
+    t->nents++;
+    free(data);
+}
+
+/* checked against the index and its signature, unpacked into stage; .INSTALL's functions become mag's scripts */
+static int pac_extract(const char *name, const char *file, const char *stage, struct tar *ctl);
+
+static int pac_unpack(const struct pkg *p, const char *file, const char *stage, struct tar *ctl)
+{
+    unsigned char *sig;
+    char *sum = sha256_file(file);
+    size_t n;
+    int v;
+    if (!sum || !p->csum || strcmp(sum, p->csum)) { say("%s: the package does not match the index", p->name); free(sum); return -1; }
+    free(sum);
+    if (p->sig) {
+        sig = xmalloc(strlen(p->sig) + 4);
+        n = unbase64(p->sig, sig);
+    } else {
+        /* the database left it out: the .sig next to the package */
+        char *base = repo_base(p->repo), *url = fmt("%s/%s.sig", base, p->file), *sf = fmt("%s.sig", file);
+        if (!exists(sf) && download(url, sf)) { say("%s is not signed", p->name); free(base); free(url); free(sf); return -1; }
+        sig = (unsigned char *)slurp(sf, &n);
+        free(base); free(url); free(sf);
+        if (!sig) return -1;
+    }
+    v = pgp_verify(file, sig, n);
+    free(sig);
+    if (v > 0) { say("%s is signed by a key mag does not have", p->name); return -1; }
+    if (v) { say("%s: the signature does not match", p->name); return -1; }
+    return pac_extract(p->name, file, stage, ctl);
+}
+
+static int pac_extract(const char *name, const char *file, const char *stage, struct tar *ctl)
+{
+    static const char *const fn[][2] = { { "pre-install", "pre_install" }, { "post-install", "post_install" }, { "pre-upgrade", "pre_upgrade" },
+        { "post-upgrade", "post_upgrade" }, { "pre-deinstall", "pre_remove" }, { "post-deinstall", "post_remove" } };
+    static const char *const meta[] = { ".PKGINFO", ".MTREE", ".BUILDINFO", ".INSTALL", ".CHANGELOG" };
+    struct in *r;
+    struct tar t;
+    char *f, *inst;
+    int fd, ok = -1, i;
+    memset(ctl, 0, sizeof *ctl);
+    if ((fd = open(file, O_RDONLY)) < 0) return -1;
+    r = xmalloc(sizeof *r);
+    memset(&t, 0, sizeof t);
+    rmtree(stage);
+    mkpath(stage, 0755);
+    t.dir = stage;
+    in_open(r, fd, 0);
+    do if (unpack_any(r, tar_out, &t) || t.bad) { say("%s: cannot unpack it", name); goto out; } while (!in_eof(r));
+    f = fmt("%s/.INSTALL", stage);
+    if ((inst = slurp(f, NULL)))
+        for (i = 0; i < 6; i++) ent_add(ctl, fmt(".%s", fn[i][0]), fmt("#!/bin/bash\n%s\ndeclare -F %s >/dev/null || exit 0\n%s \"$@\"\n", inst, fn[i][1], fn[i][1]));
+    free(inst); free(f);
+    for (i = 0; i < 5; i++) { f = fmt("%s/%s", stage, meta[i]); unlink(f); free(f); }
+    ok = 0;
+out:
+    tar_free(&t);
+    free(r);
+    close(fd);
+    return ok;
+}
+
+static long id_of(const char *file, const char *name);
+
+/* ---- the AUR: its metadata dump is the index, a PKGBUILD is built with makepkg as nobody ---- */
+
+static void to_buf(void *ctx, const unsigned char *p, size_t n) { buf_add(ctx, p, n); }
+
+/* a JSON string at s (on its quote) into o, without newlines; returns what follows it */
+static const char *js_str(const char *s, struct buf *o)
+{
+    o->n = 0;
+    buf_add(o, "", 0);
+    for (s++; *s && *s != '"'; s++) {
+        char c = *s;
+        if (c == '\\' && s[1]) {
+            c = *++s;
+            if (c == 'u' && isxdigit(s[1]) && isxdigit(s[2]) && isxdigit(s[3]) && isxdigit(s[4])) {
+                char h[5] = { s[1], s[2], s[3], s[4], 0 }, u[3];
+                unsigned v = strtoul(h, NULL, 16);
+                s += 4;
+                if (v < 0x80) { c = v < 0x20 ? ' ' : v; buf_add(o, &c, 1); }
+                else if (v < 0x800) { u[0] = 0xc0 | v >> 6; u[1] = 0x80 | (v & 63); buf_add(o, u, 2); }
+                else if (v < 0xd800 || v > 0xdfff) { u[0] = 0xe0 | v >> 12; u[1] = 0x80 | (v >> 6 & 63); u[2] = 0x80 | (v & 63); buf_add(o, u, 3); }
+                continue;
+            }
+            if (c == 'n' || c == 't' || c == 'r' || c == 'b' || c == 'f') c = ' ';
+        }
+        if (c == '\n' || c == '\r') c = ' ';
+        buf_add(o, &c, 1);
+    }
+    return *s ? s + 1 : s;
+}
+
+static const char *js_ws(const char *s) { while (*s == ' ' || *s == '\n' || *s == '\r' || *s == '\t' || *s == ',') s++; return s; }
+
+static int sync_aur(int i)
+{
+    char *url = fmt("%s/packages-meta-ext-v1.json.gz", repo_urls.v[i]), *d = tree_dir(i), *gz = fmt("%s/meta.json.gz", d), *ix = fmt("%s/INDEX", d), *tmp = fmt("%s.new", ix);
+    struct in *r = xmalloc(sizeof *r);
+    struct buf js = { 0 }, out = { 0 }, key = { 0 }, val = { 0 }, f[4] = { { 0 } }, l[3] = { { 0 } };
+    int fd = -1, bad = 1, k;
+    printf("==> %s\n", url);
+    mkpath(d, 0755);
+    if (download(url, gz)) say("could not fetch %s", url);
+    else if ((fd = open(gz, O_RDONLY)) >= 0) {
+        const char *s;
+        in_open(r, fd, 0);
+        if (gunzip(r, to_buf, &js) || !js.p) { say("%s is broken", url); goto out; }
+        s = js_ws((char *)js.p);
+        if (*s++ != '[') { say("%s is not the list it should be", url); goto out; }
+        for (;;) {
+            s = js_ws(s);
+            if (*s != '{') break;
+            for (k = 0; k < 4; k++) { f[k].n = 0; buf_add(&f[k], "", 0); }
+            for (k = 0; k < 3; k++) { l[k].n = 0; buf_add(&l[k], "", 0); }
+            for (s++;;) {
+                const char *kn;
+                int which = -1, list = -1, neg = 0;
+                s = js_ws(s);
+                if (*s == '}') { s++; break; }
+                if (*s != '"') goto out;
+                s = js_ws(js_str(s, &key));
+                if (*s++ != ':') goto out;
+                s = js_ws(s);
+                kn = (char *)key.p;
+                which = !strcmp(kn, "Name") ? 0 : !strcmp(kn, "Version") ? 1 : !strcmp(kn, "Description") ? 2 : !strcmp(kn, "PackageBase") ? 3 : -1;
+                list = !strcmp(kn, "Depends") ? 0 : !strcmp(kn, "Conflicts") ? (neg = 1, 0) : !strcmp(kn, "MakeDepends") || !strcmp(kn, "CheckDepends") ? 1 : !strcmp(kn, "Provides") ? 2 : -1;
+                if (*s == '"') {
+                    s = js_str(s, &val);
+                    if (which >= 0) { f[which].n = 0; buf_add(&f[which], val.p, val.n); }
+                } else if (*s == '[') {
+                    for (s++;;) {
+                        s = js_ws(s);
+                        if (*s == ']') { s++; break; }
+                        if (*s != '"') goto out;
+                        s = js_str(s, &val);
+                        if (list >= 0 && val.n && !strchr((char *)val.p, ' ')) {
+                            if (l[list].n) buf_add(&l[list], " ", 1);
+                            if (neg) buf_add(&l[list], "!", 1);
+                            buf_add(&l[list], val.p, val.n);
+                        }
+                    }
+                } else while (*s && *s != ',' && *s != '}') s++;
+            }
+            if (f[0].n && f[1].n) {
+                field(&out, 'P', (char *)f[0].p); field(&out, 'V', (char *)f[1].p); field(&out, 'T', (char *)f[2].p);
+                field(&out, 'B', (char *)f[3].p); field(&out, 'D', (char *)l[0].p); field(&out, 'M', (char *)l[1].p); field(&out, 'p', (char *)l[2].p);
+                buf_add(&out, "\n", 1);
+            }
+        }
+        db_put_file(tmp, out.n ? (char *)out.p : "");
+        bad = rename(tmp, ix) < 0;
+    }
+out:
+    if (fd >= 0) close(fd);
+    free(r); free(js.p); free(out.p); free(key.p); free(val.p);
+    for (k = 0; k < 4; k++) free(f[k].p);
+    for (k = 0; k < 3; k++) free(l[k].p);
+    free(url); free(d); free(gz); free(ix); free(tmp);
+    return bad;
+}
+
+/* the snapshot of the package base, built by makepkg as nobody inside the root; the package it made goes into stage */
+static void build_aur(const struct pkg *p, const char *stage, struct tar *ctl)
+{
+    const char *base = p->base ? p->base : p->name;
+    char *top = fmt("%s/var/cache/mag/aur", root), *dir = fmt("%s/%s", top, base), *tgz = fmt("%s/%s.tar.gz", top, base),
+        *url = fmt("%s/cgit/aur.git/snapshot/%s.tar.gz", repo_urls.v[p->repo], base), *in = fmt("/var/cache/mag/aur/%s", base), *outd, *built = NULL, *sh;
+    struct list files = { 0 }, dirs = { 0 };
+    struct in *r = xmalloc(sizeof *r);
+    struct tar t;
+    long uid = id_of("passwd", "nobody"), gid = id_of("group", "nobody");
+    int fd, i;
+    DIR *od;
+    struct dirent *e;
+    char *av[] = { "/usr/bin/setpriv", "--reuid=nobody", "--regid=nobody", "--clear-groups", "/bin/bash", "-c", NULL, NULL };
+    if (uid < 0 || gid < 0) die("%s: there is no nobody here to build as", p->name);
+    rmtree(dir);
+    mkpath(top, 0755);
+    printf("==> %s\n", url);
+    if (download(url, tgz)) die("could not fetch %s", url);
+    memset(&t, 0, sizeof t);
+    t.dir = top;
+    if ((fd = open(tgz, O_RDONLY)) < 0) die("cannot read %s", tgz);
+    in_open(r, fd, 0);
+    if (gunzip(r, tar_out, &t) || t.bad) die("%s: the snapshot is broken", p->name);
+    close(fd);
+    tar_free(&t);
+    free(r);
+    unlink(tgz);
+    walk(dir, "", &files, &dirs);
+    lchown(dir, uid, gid);
+    for (i = 0; i < files.n; i++) { char *f = fmt("%s/%s", dir, files.v[i]); lchown(f, uid, gid); free(f); }
+    for (i = 0; i < dirs.n; i++) { char *f = fmt("%s/%s", dir, dirs.v[i]); lchown(f, uid, gid); free(f); }
+    list_free(&files); list_free(&dirs);
+    printf("==> building %s from the AUR in %s\n", p->name, in);
+    sh = fmt("cd '%s' && export HOME=$PWD BUILDDIR=$PWD/build PKGDEST=$PWD/out SRCDEST=$PWD/src GNUPGHOME=$PWD/.gnupg && mkdir -p out src .gnupg && chmod 700 .gnupg && "
+        "for k in $(sed -n 's/^[[:space:]]*validpgpkeys = //p' .SRCINFO); do gpg --batch -q --keyserver hkps://keyserver.ubuntu.com --recv-keys \"$k\" || :; done; "
+        "makepkg --nodeps --noconfirm --noprogressbar -f", in);
+    av[6] = sh;
+    if (run_in_root(av, NULL)) die("%s did not build; what makepkg left is in %s", p->name, in);
+    free(sh);
+    outd = fmt("%s/out", dir);
+    /* NAME-VERSION-RELEASE-ARCH.pkg.tar.*: the version can be newer than the index says, a -git one sets its own */
+    if ((od = opendir(outd))) {
+        while ((e = readdir(od)) && !built) {
+            char *n = xstrdup(e->d_name), *x = strstr(n, ".pkg.tar"), *c;
+            int dashes = 0;
+            if (x && !strstr(n, ".sig")) {
+                for (*x = 0, c = x; c > n && dashes < 3; ) if (*--c == '-') dashes++;
+                if (dashes == 3) { *c = 0; if (!strcmp(n, p->name)) built = fmt("%s/%s", outd, e->d_name); }
+            }
+            free(n);
+        }
+        closedir(od);
+    }
+    if (!built) die("%s: makepkg made no package called that", p->name);
+    if (pac_extract(p->name, built, stage, ctl)) die("%s: cannot unpack what makepkg made", p->name);
+    free(built); free(outd); free(top); free(dir); free(tgz); free(url); free(in);
+}
+
 /* ---- installing a package ---- */
 
-static char *pkg_file(const struct pkg *p) { return fmt("%s/var/cache/mag/pkg/%s-%s.apk", root, p->name, p->ver); }
+static char *pkg_file(const struct pkg *p)
+{
+    if (kinds[p->repo] == PACMAN) return fmt("%s/var/cache/mag/pkg/%s", root, p->file);
+    return fmt("%s/var/cache/mag/pkg/%s-%s.apk", root, p->name, p->ver);
+}
 
 /* the control part is checked against the index, the files against the control part, then they go into stage */
 static int unpack(const struct pkg *p, const char *file, const char *stage, struct tar *ctl)
@@ -2925,7 +4095,7 @@ static struct list changed_dirs;
 
 static void fetch_pkg(const struct pkg *p, const char *file)
 {
-    char *base = repo_base(p->repo), *url = fmt("%s/%s-%s.apk", base, p->name, p->ver);
+    char *base = repo_base(p->repo), *url = kinds[p->repo] == PACMAN ? fmt("%s/%s", base, p->file) : fmt("%s/%s-%s.apk", base, p->name, p->ver);
     printf("==> fetching %s\n", url);
     if (download(url, file)) die("could not fetch %s", url);
     free(base); free(url);
@@ -2990,19 +4160,21 @@ static void install_one(struct pkg *p, int explicit, const struct list *planned)
     char *file = pkg_file(p), *stage = fmt("%s/var/tmp/mag/%s", root, p->name), *oldver = db_get(p->name, "version"), *trig;
     struct list files = { 0 }, dirs = { 0 }, old, gone = { 0 }, deps = { 0 }, w, v = { 0 }, pr = { 0 }, sums, newsums = { 0 };
     struct tar ctl;
-    int i, bad = 0, port = kinds[p->repo] != APK;
+    int i, bad = 0, port = BUILT(kinds[p->repo]);
+    int (*un)(const struct pkg *, const char *, const char *, struct tar *) = kinds[p->repo] == PACMAN ? pac_unpack : unpack;
     list_free(&named);
     if (port) {
         memset(&ctl, 0, sizeof ctl);
-        if (kinds[p->repo] == CRUX) build_port(p, stage); else build_tree(p, stage);
+        if (kinds[p->repo] == AUR) build_aur(p, stage, &ctl);
+        else if (kinds[p->repo] == CRUX) build_port(p, stage); else build_tree(p, stage);
     } else {
         int fresh = !exists(file);
         if (fresh) fetch_pkg(p, file);
-        if (unpack(p, file, stage, &ctl)) {
+        if (un(p, file, stage, &ctl)) {
             unlink(file);
             if (fresh) die("not installing %s", p->name);
             fetch_pkg(p, file);
-            if (unpack(p, file, stage, &ctl)) { unlink(file); die("not installing %s", p->name); }
+            if (un(p, file, stage, &ctl)) { unlink(file); die("not installing %s", p->name); }
         }
     }
     walk(stage, "", &files, &dirs);
@@ -3087,6 +4259,12 @@ static void install_one(struct pkg *p, int explicit, const struct list *planned)
     }
     if (bad) die("%s did not install cleanly", p->name);
     for (i = 0; i < old.n; i++) if (!has(&files, old.v[i]) && !owned_by_other(old.v[i], p->name)) push(&gone, old.v[i]);
+    if (alpm_order) {
+        for (i = 0; i < files.n; i++) push(&did_files, fmt("%c %s", oldver && has(&old, files.v[i]) ? 'U' : 'I', files.v[i]));
+        for (i = 0; i < dirs.n; i++) push(&did_files, fmt("%c %s/", oldver ? 'U' : 'I', dirs.v[i]));
+        for (i = 0; i < gone.n; i++) push(&did_files, fmt("R %s", gone.v[i]));
+        push(&did_pkgs, fmt("%c %s", oldver ? 'U' : 'I', p->name));
+    }
     delete_files(&gone);
     rmtree(stage);
 
@@ -3161,17 +4339,21 @@ static char *port_dep(int kind, const char *w)
 static void plan(struct pkg *p, struct list *order, struct list *stack)
 {
     struct list w;
-    int i, j, port = kinds[p->repo] != APK;
+    int i, j, k = kinds[p->repo], port = BUILT(k), tree = k == VOID || k == EXHERBO;
+    char *all;
     if (has(order, p->name) || has(stack, p->name)) return;
     push(stack, p->name);
-    if (port) { plan_tool("build-base", order, stack); plan_tool("pkgconf", order, stack); plan_tool("bash", order, stack); }
-    if (port && kinds[p->repo] != CRUX) { plan_tool("tar", order, stack); plan_tool("xz", order, stack); }
-    w = words(p->deps);
+    if (port && k != AUR) { plan_tool("build-base", order, stack); plan_tool("pkgconf", order, stack); plan_tool("bash", order, stack); }
+    if (tree) { plan_tool("tar", order, stack); plan_tool("xz", order, stack); }
+    if (k == AUR) { plan_tool("base-devel", order, stack); plan_tool("git", order, stack); }
+    all = fmt("%s %s", p->deps ? p->deps : "", p->mdeps ? p->mdeps : "");
+    w = words(all);
+    free(all);
     for (i = 0; i < w.n; i++) {
         struct dep d;
         struct pkg *c;
         int done = 0;
-        if (port && kinds[p->repo] != CRUX) { char *m = port_dep(kinds[p->repo], w.v[i]); dep_parse(m, &d); free(m); }
+        if (tree) { char *m = port_dep(k, w.v[i]); dep_parse(m, &d); free(m); }
         else dep_parse(w.v[i], &d);
         if (d.neg || !strcmp(d.key, p->name)) continue;
         for (j = 0; j < order->n && !done; j++) {
@@ -3184,13 +4366,13 @@ static void plan(struct pkg *p, struct list *order, struct list *stack)
                 if (q && meets(&d, q->name, q->ver, q->prov)) c = q;
             }
             if (!c && !(c = pick(&d))) {
-                if (!port || kinds[p->repo] == CRUX) die("%s needs %s, which no repo has", p->name, w.v[i]);
+                if (!tree) die("%s needs %s, which no repo has", p->name, w.v[i]);
                 say("%s wants %s, which no repo has, building without it", p->name, w.v[i]);
                 continue;
             }
             plan(c, order, stack);
         }
-        if (port) {
+        if (port && k != AUR) {
             struct pkg *q = newest(d.key);
             char *dev = fmt("%s-dev", d.key), *m = dbdir(d.key), *f = fmt("%s/port", m);
             if (q && kinds[q->repo] == APK && !exists(f)) plan_tool(dev, order, stack);
@@ -3272,7 +4454,7 @@ static int apply(const struct list *order, const struct list *want)
     }
     if (!order->n) return 0;
     printf("will install:");
-    for (i = 0; i < order->n; i++) printf(" %s%s", order->v[i], kinds[newest(order->v[i])->repo] != APK ? " (built here)" : "");
+    for (i = 0; i < order->n; i++) printf(" %s%s", order->v[i], BUILT(kinds[newest(order->v[i])->repo]) ? " (built here)" : "");
     putchar('\n');
     if (dry) return 0;
     if (geteuid()) die("this needs root");
@@ -3288,6 +4470,7 @@ static int apply(const struct list *order, const struct list *want)
     }
     run_waiting();
     triggers(&changed_dirs);
+    after_run();
     {
         char *f = pending_file();
         unlink(f); free(f);
@@ -3349,6 +4532,8 @@ static int cmd_update(void)
     int i, bad = 0;
     for (i = 0; i < repo_urls.n; i++) {
         char *base, *url, *f, *tmp;
+        if (kinds[i] == PACMAN) { bad |= sync_pacman(i); continue; }
+        if (kinds[i] == AUR) { bad |= sync_aur(i); continue; }
         if (kinds[i] != APK) { bad |= kinds[i] == CRUX ? sync_tree(i) : sync_archive(i); continue; }
         base = repo_base(i); url = fmt("%s/APKINDEX.tar.gz", base); f = index_file(i); tmp = fmt("%s.new", f);
         printf("==> %s\n", url);
@@ -3371,7 +4556,7 @@ static int cmd_build(int n, char **names)
             int j;
             for (j = 0; j < npkgs; j++) {
                 struct list pv;
-                if (kinds[pkgs[j].repo] == APK || !pkgs[j].prov) continue;
+                if (!BUILT(kinds[pkgs[j].repo]) || !pkgs[j].prov) continue;
                 pv = words(pkgs[j].prov);
                 if (has(&pv, names[i])) names[i] = pkgs[j].name;
                 list_free(&pv);
@@ -3386,6 +4571,14 @@ static int cmd_build(int n, char **names)
 static int cmd_remove(int n, char **names)
 {
     int i;
+    for (i = 0; alpm_order && !dry && i < n; i++) {
+        struct list files = installed(names[i]) ? db_read(names[i], "files") : (struct list){ 0 };
+        int k;
+        for (k = 0; k < files.n; k++) push(&did_files, fmt("R %s", files.v[k]));
+        push(&did_pkgs, fmt("R %s", names[i]));
+        list_free(&files);
+    }
+    run_hooks(0);
     for (i = 0; i < n; i++) {
         struct list rd, files;
         char *d, *v;
@@ -3411,6 +4604,7 @@ static int cmd_remove(int n, char **names)
         list_free(&files); list_free(&rd);
         printf("==> removed %s\n", names[i]);
     }
+    if (!dry) after_run();
     return 0;
 }
 
@@ -3534,7 +4728,7 @@ static int cmd_fetch(int n, char **names)
         struct pkg *p = newest(names[i]);
         char *file, *base, *url;
         if (!p) die("%s is in no repo", names[i]);
-        if (kinds[p->repo] != APK) { printf("%s comes from a port tree, it is built and not fetched\n", p->name); continue; }
+        if (BUILT(kinds[p->repo])) { printf("%s comes from a port tree, it is built and not fetched\n", p->name); continue; }
         file = pkg_file(p); base = repo_base(p->repo); url = fmt("%s/%s-%s.apk", base, p->name, p->ver);
         printf("==> fetching %s\n", url);
         if (download(url, file)) die("could not fetch %s", url);
@@ -3570,6 +4764,10 @@ static void usage(void)
          "Exherbo's exheres; those two come whole as a tarball on mag update and are not signed. What a\n"
          "repo has built wins over a port, mag build takes the port. Ports build with bash and the CFLAGS, CXXFLAGS and\n"
          "MAKEFLAGS of /etc/mag/build.conf, if it is there.\n"
+         "\"pacman URL\" is a pacman repo like Artix's and Arch's, pacman https://geo.mirror.pkgbuild.com/extra/os: its\n"
+         "packages are checked against the OpenPGP keyrings in /etc/mag/keys (*.gpg) and /usr/share/pacman/keyrings, and the\n"
+         "hooks in /usr/share/libalpm/hooks run after them. A name in two pacman repos comes from the first one, as in pacman.\n"
+         "\"aur https://aur.archlinux.org\" is the AUR: a PKGBUILD is built by makepkg as nobody in /var/cache/mag/aur.\n"
          "MAG_ROOT installs somewhere else than /, MAG_ARCH overrides the arch, MAG_FETCH is the download command, which gets a file and an url (curl, else wget, else ftp)");
 }
 
