@@ -22,7 +22,7 @@
 #include <sys/wait.h>
 #endif
 
-#define VERSION "0.4"
+#define VERSION "0.5"
 
 static const char *prog = "mag";
 static const char *root = "";                   /* MAG_ROOT without the trailing slash, "" is / */
@@ -500,6 +500,7 @@ struct tar {
     struct buf meta;
     char *path, *link;
     unsigned mode, uid, gid;
+    char uname[33], gname[33];
     const char *dir;            /* unpack here; NULL keeps the files in ents instead */
     struct ent *ents;
     int nents;
@@ -572,6 +573,9 @@ static void tar_done(struct tar *t)
     free(t->link); t->link = NULL;
 }
 
+/* owners by name, "path\tuser\tgroup": the ids are the build machine's, the names are what the package means */
+static struct list named;
+
 static void tar_entry(struct tar *t, const char *name, const char *ln)
 {
     char *rel = clean(name), *full;
@@ -589,6 +593,8 @@ static void tar_entry(struct tar *t, const char *name, const char *ln)
         } else free(rel);
         return;
     }
+    if ((*t->uname && strcmp(t->uname, "root")) || (*t->gname && strcmp(t->gname, "root")))
+        push(&named, fmt("%s\t%s\t%s", rel, *t->uname ? t->uname : "root", *t->gname ? t->gname : "root"));
     full = fmt("%s/%s", t->dir, rel);
     mkparent(full);
     if (type == '5') {
@@ -624,6 +630,8 @@ static void tar_header(struct tar *t)
     t->mode = octal(h + 100, 8);
     t->uid = octal(h + 108, 8);
     t->gid = octal(h + 116, 8);
+    memcpy(t->uname, h + 265, 32); t->uname[32] = 0;
+    memcpy(t->gname, h + 297, 32); t->gname[32] = 0;
     name[0] = 0;
     if (!memcmp(h + 257, "ustar", 5) && h[345]) { memcpy(name, h + 345, 155); name[155] = 0; strcat(name, "/"); }
     { size_t l = strlen(name), k = 0; while (k < 100 && h[k]) { name[l + k] = h[k]; k++; } name[l + k] = 0; }
@@ -1040,7 +1048,7 @@ static int ed25519_ok(const unsigned char *sig, const unsigned char *pk, const c
 
 /* ---- the repos ---- */
 
-struct pkg { char *name, *ver, *desc, *csum, *deps, *prov, *size; int prio, repo; };
+struct pkg { char *name, *ver, *desc, *csum, *deps, *prov, *size, *iif; int prio, repo; };
 struct prov { char *key, *ver; struct pkg *p; };
 
 static struct pkg *pkgs;
@@ -1236,6 +1244,7 @@ static void parse_index(char *t, int repo)
         case 'D': p.deps = line + 2; break;
         case 'p': p.prov = line + 2; break;
         case 'S': p.size = line + 2; break;
+        case 'i': p.iif = line + 2; break;
         case 'k': p.prio = atoi(line + 2); break;
         }
     }
@@ -1381,6 +1390,29 @@ static int meets(const struct dep *d, const char *name, const char *ver, const c
     return ok;
 }
 
+static struct pkg *newest(const char *name);
+static int installed(const char *name);
+
+/* providers the packages asked for name themselves, like polkit-elogind-libs for polkit-elogind: these win over priority */
+static struct list prefer;
+
+static void prefer_deps(const char *name)
+{
+    struct pkg *p = newest(name);
+    struct list w;
+    int i;
+    if (!p || has(&prefer, name)) return;
+    push(&prefer, xstrdup(name));
+    if (!p->deps) return;
+    w = words(p->deps);
+    for (i = 0; i < w.n; i++) {
+        struct dep d;
+        dep_parse(w.v[i], &d);
+        if (!d.neg && newest(d.key)) prefer_deps(d.key);
+    }
+    list_free(&w);
+}
+
 static struct pkg *pick(const struct dep *d)
 {
     struct pkg *best = NULL;
@@ -1393,6 +1425,8 @@ static struct pkg *pick(const struct dep *d)
         if (!dep_ok(d, provs[i].ver)) continue;
         if (!best) { best = p; continue; }
         named = !strcmp(p->name, d->key); bnamed = !strcmp(best->name, d->key);
+        if (named != bnamed) { if (named) best = p; continue; }
+        named = has(&prefer, p->name) || installed(p->name); bnamed = has(&prefer, best->name) || installed(best->name);
         if (named != bnamed) { if (named) best = p; continue; }
         if (p->prio != best->prio) { if (p->prio > best->prio) best = p; continue; }
         if (!strcmp(p->name, best->name) ? vercmp(p->ver, best->ver) > 0 : p->repo < best->repo) best = p;
@@ -1611,6 +1645,13 @@ static const char *owner_of(const char *path)
         if (c < 0) hi = mid - 1; else lo = mid + 1;
     }
     return NULL;
+}
+
+static int owned_by_other(const char *path, const char *name)
+{
+    int i;
+    for (i = 0; i < nowners; i++) if (!strcmp(owners[i].path, path) && strcmp(owners[i].pkg, name)) return 1;
+    return 0;
 }
 
 static void remove_empty_parents(const char *rel)
@@ -2890,13 +2931,67 @@ static void fetch_pkg(const struct pkg *p, const char *file)
     free(base); free(url);
 }
 
+/* is the file at full still what the package put there, by the sums mag kept of its /etc files */
+static int etc_untouched(const struct list *sums, const char *rel, const char *full)
+{
+    int i, same = 0;
+    char *sum;
+    for (i = 0; i < sums->n; i++) {
+        const char *sp = strchr(sums->v[i], ' ');
+        if (!sp || strcmp(sp + 1, rel)) continue;
+        if ((sum = sha256_file(full))) { same = !strncmp(sums->v[i], sum, sp - sums->v[i]); free(sum); }
+        break;
+    }
+    return same;
+}
+
+/* the id of NAME in the root's passwd or group file, or -1 */
+static long id_of(const char *file, const char *name)
+{
+    char *f = fmt("%s/etc/%s", root, file), *t = slurp(f, NULL), *line, *next;
+    long id = -1;
+    size_t n = strlen(name);
+    for (line = t; line && *line && id < 0; line = next) {
+        next = strchr(line, '\n');
+        if (next) *next++ = 0;
+        if (!strncmp(line, name, n) && line[n] == ':') {
+            char *c = strchr(line + n + 1, ':');
+            if (c) id = strtol(c + 1, NULL, 10);
+        }
+    }
+    free(t); free(f);
+    return id;
+}
+
+/* the owner a file of the package gets here: by the names in the package, once its pre-install made the users */
+static int owner_here(const char *rel, struct stat *st)
+{
+    int i;
+    size_t n = strlen(rel);
+    for (i = 0; i < named.n; i++) {
+        char *u, *g;
+        long id;
+        if (strncmp(named.v[i], rel, n) || named.v[i][n] != '\t') continue;
+        u = named.v[i] + n + 1;
+        g = strchr(u, '\t');
+        if (!g) return 0;
+        *g = 0;
+        if ((id = !strcmp(u, "root") ? 0 : id_of("passwd", u)) >= 0) st->st_uid = id;
+        *g = '\t';
+        if ((id = !strcmp(g + 1, "root") ? 0 : id_of("group", g + 1)) >= 0) st->st_gid = id;
+        return 1;
+    }
+    return 0;
+}
+
 static void install_one(struct pkg *p, int explicit, const struct list *planned)
 {
     static const char *const scripts[] = { "pre-install", "post-install", "pre-upgrade", "post-upgrade", "pre-deinstall", "post-deinstall", "trigger" };
     char *file = pkg_file(p), *stage = fmt("%s/var/tmp/mag/%s", root, p->name), *oldver = db_get(p->name, "version"), *trig;
-    struct list files = { 0 }, dirs = { 0 }, old, gone = { 0 }, deps = { 0 }, w, v = { 0 }, pr = { 0 };
+    struct list files = { 0 }, dirs = { 0 }, old, gone = { 0 }, deps = { 0 }, w, v = { 0 }, pr = { 0 }, sums, newsums = { 0 };
     struct tar ctl;
     int i, bad = 0, port = kinds[p->repo] != APK;
+    list_free(&named);
     if (port) {
         memset(&ctl, 0, sizeof ctl);
         if (kinds[p->repo] == CRUX) build_port(p, stage); else build_tree(p, stage);
@@ -2917,7 +3012,8 @@ static void install_one(struct pkg *p, int explicit, const struct list *planned)
         struct stat st;
         const char *o = owner_of(files.v[i]);
         char *full = fmt("%s/%s", root, files.v[i]);
-        if (o && strcmp(o, p->name)) { if (bad < 5) say("%s wants /%s, which %s has", p->name, files.v[i], o); bad++; }
+        /* a package upgraded in the same run may be letting go of the file, as chamesle-base did of /sbin/service */
+        if (o && strcmp(o, p->name) && !has(planned, o)) { if (bad < 5) say("%s wants /%s, which %s has", p->name, files.v[i], o); bad++; }
         else if (!o && exists(full) && strncmp(files.v[i], "etc/", 4) && !(lstat(full, &st) == 0 && S_ISLNK(st.st_mode))) {
             char *from = fmt("%s/%s", stage, files.v[i]);
             if (!same_file(from, full)) { if (bad < 5) say("%s wants /%s, which is there already and is different", p->name, files.v[i]); bad++; }
@@ -2945,14 +3041,17 @@ static void install_one(struct pkg *p, int explicit, const struct list *planned)
     if (oldver) script_or_later(p->name, "pre-upgrade", p->ver, oldver);
     else script_or_later(p->name, "pre-install", p->ver, NULL);
 
+    sums = db_read(p->name, "etcsums");
     for (i = 0; i < dirs.n; i++) {
         char *from = fmt("%s/%s", stage, dirs.v[i]), *to = fmt("%s/%s", root, dirs.v[i]);
         struct stat st;
-        if (!exists(to) && !lstat(from, &st)) {
+        if (lstat(from, &st)) { free(from); free(to); continue; }
+        if (!exists(to)) {
+            owner_here(dirs.v[i], &st);
             mkpath(to, 0755);
             chmod(to, st.st_mode & 07777);
             if (!geteuid()) lchown(to, st.st_uid, st.st_gid);
-        }
+        } else if (owner_here(dirs.v[i], &st) && !geteuid()) lchown(to, st.st_uid, st.st_gid);
         free(from); free(to);
     }
     for (i = 0; i < files.n; i++) {
@@ -2960,6 +3059,7 @@ static void install_one(struct pkg *p, int explicit, const struct list *planned)
         struct stat st;
         mkparent(to);
         if (lstat(from, &st) < 0) die("cannot stat %s", from);
+        owner_here(files.v[i], &st);
         if (S_ISLNK(st.st_mode)) {
             char tgt[PATH_MAX];
             ssize_t n = readlink(from, tgt, sizeof tgt - 1);
@@ -2968,20 +3068,25 @@ static void install_one(struct pkg *p, int explicit, const struct list *planned)
             unlink(to);
             if (symlink(tgt, to) < 0) { say("cannot link %s: %s", to, strerror(errno)); bad = 1; }
             else if (!geteuid()) lchown(to, st.st_uid, st.st_gid);
-        } else if (!strncmp(files.v[i], "etc/", 4) && exists(to) && !same_file(from, to)) {
+        } else if (!strncmp(files.v[i], "etc/", 4) && exists(to) && !same_file(from, to) && !etc_untouched(&sums, files.v[i], to)) {
             char *alt = fmt("%s.new", to);
             printf("==> /%s is changed here, the new one is /%s.new\n", files.v[i], files.v[i]);
             if (copy_into(from, alt, &st) < 0) { say("cannot write %s: %s", alt, strerror(errno)); bad = 1; }
             free(alt);
         } else if (copy_into(from, to, &st) < 0) { say("cannot write %s: %s", to, strerror(errno)); bad = 1; }
-        if ((slash = strrchr(files.v[i], '/'))) {
+        if (!strncmp(files.v[i], "etc/", 4) && S_ISREG(st.st_mode)) {
+            char *sum = sha256_file(from);
+            if (sum) { push(&newsums, fmt("%s %s", sum, files.v[i])); free(sum); }
+        }
+        /* the directory and the ones above it: shared-mime-info watches /usr/share/mime for files in packages/ */
+        for (slash = strchr(files.v[i], '/'); slash; slash = strchr(slash + 1, '/')) {
             char *dir = fmt("/%.*s", (int)(slash - files.v[i]), files.v[i]);
             if (!has(&changed_dirs, dir)) push(&changed_dirs, dir); else free(dir);
         }
         free(from); free(to);
     }
     if (bad) die("%s did not install cleanly", p->name);
-    for (i = 0; i < old.n; i++) if (!has(&files, old.v[i])) push(&gone, old.v[i]);
+    for (i = 0; i < old.n; i++) if (!has(&files, old.v[i]) && !owned_by_other(old.v[i], p->name)) push(&gone, old.v[i]);
     delete_files(&gone);
     rmtree(stage);
 
@@ -3006,6 +3111,7 @@ static void install_one(struct pkg *p, int explicit, const struct list *planned)
     db_write(p->name, "deps", &deps);
     db_write(p->name, "provides", &pr);
     db_write(p->name, "files", &files);
+    db_write(p->name, "etcsums", &newsums);
     if ((trig = pkginfo(&ctl, "triggers"))) db_put(p->name, "triggers", trig, strlen(trig), 0644);
     if (explicit) db_put(p->name, "explicit", "", 0, 0644);
     if (port) db_put(p->name, "port", repo_urls.v[p->repo], strlen(repo_urls.v[p->repo]), 0644);
@@ -3015,7 +3121,7 @@ static void install_one(struct pkg *p, int explicit, const struct list *planned)
     if (oldver) script_or_later(p->name, "post-upgrade", p->ver, oldver);
     else script_or_later(p->name, "post-install", p->ver, NULL);
     printf("==> installed %s %s%s%s\n", p->name, p->ver, oldver ? ", was " : "", oldver ? oldver : "");
-    list_free(&files); list_free(&dirs); list_free(&old); free(gone.v); list_free(&deps); free(v.v); free(pr.v);
+    list_free(&files); list_free(&dirs); list_free(&old); list_free(&sums); list_free(&newsums); free(gone.v); list_free(&deps); free(v.v); free(pr.v);
     free(oldver); free(file); free(stage);
 }
 
@@ -3096,9 +3202,74 @@ static void plan(struct pkg *p, struct list *order, struct list *stack)
     push(order, p->name);
 }
 
+/* install_if: a package that comes by itself once all it names is installed or coming, like foo-openrc with openrc and foo */
+static int coming(const char *tok, const struct list *order)
+{
+    struct dep d;
+    int j;
+    dep_parse(tok, &d);
+    for (j = 0; j < order->n; j++) {
+        struct pkg *q = newest(order->v[j]);
+        if (q && meets(&d, q->name, q->ver, q->prov)) return !d.neg;
+    }
+    return d.neg ? !installed_for(&d) : installed_for(&d) != NULL;
+}
+
+static void plan_install_ifs(struct list *order, struct list *stack)
+{
+    int i, j, ok, more = 1;
+    while (more) {
+        more = 0;
+        for (i = 0; i < npkgs; i++) {
+            struct pkg *p = &pkgs[i];
+            struct list w;
+            if (!p->iif || has(order, p->name) || newest(p->name) != p || installed(p->name)) continue;
+            w = words(p->iif);
+            for (j = 0, ok = 1; j < w.n && ok; j++) ok = coming(w.v[j], order);
+            list_free(&w);
+            if (ok) { plan(p, order, stack); more = 1; }
+        }
+    }
+}
+
+/* the directories changed by a run that did not get to its triggers, so the next run runs them */
+static char *pending_file(void) { return fmt("%s/var/lib/mag/.triggers", root); }
+
+static void pending_save(void)
+{
+    char *f = pending_file();
+    struct buf b = { 0 };
+    int i;
+    buf_add(&b, "", 0);
+    for (i = 0; i < changed_dirs.n; i++) { buf_add(&b, changed_dirs.v[i], strlen(changed_dirs.v[i])); buf_add(&b, "\n", 1); }
+    mkparent(f);
+    db_put_file(f, (char *)b.p);
+    free(b.p); free(f);
+}
+
+static void pending_load(void)
+{
+    char *f = pending_file(), *t = slurp(f, NULL), *line, *next;
+    for (line = t; line && *line; line = next) {
+        next = strchr(line, '\n');
+        if (next) *next++ = 0;
+        if (*line && !has(&changed_dirs, line)) push(&changed_dirs, xstrdup(line));
+    }
+    free(t); free(f);
+}
+
 static int apply(const struct list *order, const struct list *want)
 {
     int i;
+    if (!dry && !geteuid()) {
+        pending_load();
+        if (!order->n && changed_dirs.n) {
+            char *f = pending_file();
+            puts("running the triggers a run before this one did not get to");
+            triggers(&changed_dirs);
+            unlink(f); free(f);
+        }
+    }
     if (!order->n) return 0;
     printf("will install:");
     for (i = 0; i < order->n; i++) printf(" %s%s", order->v[i], kinds[newest(order->v[i])->repo] != APK ? " (built here)" : "");
@@ -3113,9 +3284,14 @@ static int apply(const struct list *order, const struct list *want)
     for (i = 0; i < order->n; i++) {
         struct pkg *p = newest(order->v[i]);
         install_one(p, has(want, p->name), order);
+        pending_save();
     }
     run_waiting();
     triggers(&changed_dirs);
+    {
+        char *f = pending_file();
+        unlink(f); free(f);
+    }
     return 0;
 }
 
@@ -3125,6 +3301,7 @@ static int cmd_install(int n, char **names)
     int i;
     load_index();
     for (i = 0; i < n; i++) push(&wanted, names[i]);
+    for (i = 0; i < n; i++) prefer_deps(names[i]);
     for (i = 0; i < n; i++) {
         struct pkg *p = newest(names[i]);
         if (!p) {
@@ -3145,6 +3322,7 @@ static int cmd_install(int n, char **names)
         }
         plan(p, &order, &stack);
     }
+    plan_install_ifs(&order, &stack);
     return apply(&order, &want);
 }
 
@@ -3161,6 +3339,7 @@ static int cmd_upgrade(void)
         if (p && v && vercmp(p->ver, v) > 0) plan(p, &order, &stack);
         free(v); free(d); free(e);
     }
+    plan_install_ifs(&order, &stack);
     if (!order.n) { puts("everything is up to date"); return 0; }
     return apply(&order, &want);
 }
