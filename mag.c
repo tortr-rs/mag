@@ -4880,6 +4880,17 @@ int main(int argc, char **argv)
             else { say("unknown option -%c", *o); return 1; }
         }
     }
+    {
+        /* -y and the rest after the command too: mag install -y foo */
+        int j, k = i;
+        for (j = i; j < argc; j++) {
+            if (argv[j][0] == '-' && argv[j][1] && strspn(argv[j] + 1, "nfy") == strlen(argv[j] + 1) && j > i) {
+                const char *o;
+                for (o = argv[j] + 1; *o; o++) { if (*o == 'n') dry = 1; else if (*o == 'f') force = 1; else yes = 1; }
+            } else argv[k++] = argv[j];
+        }
+        argc = k;
+    }
     if (i >= argc || !strcmp(argv[i], "help")) { usage(); return i >= argc ? 1 : 0; }
     arch = machine();
     {
