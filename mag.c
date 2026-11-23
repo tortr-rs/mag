@@ -22,7 +22,7 @@
 #include <sys/wait.h>
 #endif
 
-#define VERSION "0.7.1"
+#define VERSION "0.7.2"
 
 static const char *prog = "mag";
 static const char *root = "";                   /* MAG_ROOT without the trailing slash, "" is / */
@@ -4919,6 +4919,12 @@ int main(int argc, char **argv)
         char **a = argv + i;
         if (strcmp(cmd, "list") && strcmp(cmd, "files") && strcmp(cmd, "owns") && strcmp(cmd, "remove") && strcmp(cmd, "del")
             && strcmp(cmd, "rdeps") && strcmp(cmd, "autoremove")) load_repos();
+        else {
+            /* remove needs to know a pacman system for its hooks */
+            char *d = confdir(), *f = fmt("%s/repos", d);
+            if (exists(f)) load_repos();
+            free(d); free(f);
+        }
         if (!strcmp(cmd, "update") && !n) rc = cmd_update();
         else if (!strcmp(cmd, "install") || !strcmp(cmd, "add")) rc = n ? cmd_install(n, a) : (say("install what?"), 1);
         else if (!strcmp(cmd, "build")) rc = n ? cmd_build(n, a) : (say("build what?"), 1);
