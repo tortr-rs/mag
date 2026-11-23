@@ -4409,11 +4409,31 @@ static int coming(const char *tok, const struct list *order)
     return d.neg ? !installed_for(&d) : installed_for(&d) != NULL;
 }
 
+/* Artix keeps a daemon's OpenRC service in NAME-openrc (or BASE-openrc), which nothing depends on: it comes along */
+static int plan_openrc(struct list *order, struct list *stack)
+{
+    int i, k, more = 0;
+    for (i = 0; alpm_order && i < order->n; i++) {
+        struct pkg *p = newest(order->v[i]), *s;
+        const char *names[2];
+        if (!p) continue;
+        names[0] = p->name; names[1] = p->base;
+        for (k = 0; k < 2; k++) {
+            char *n;
+            if (!names[k] || (k && !strcmp(names[0], names[1]))) continue;
+            n = fmt("%s-openrc", names[k]);
+            if (!has(order, n) && !installed(n) && (s = newest(n))) { plan(s, order, stack); more = 1; }
+            free(n);
+        }
+    }
+    return more;
+}
+
 static void plan_install_ifs(struct list *order, struct list *stack)
 {
     int i, j, ok, more = 1;
     while (more) {
-        more = 0;
+        more = plan_openrc(order, stack);
         for (i = 0; i < npkgs; i++) {
             struct pkg *p = &pkgs[i];
             struct list w;
