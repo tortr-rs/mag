@@ -22,12 +22,12 @@
 #include <sys/wait.h>
 #endif
 
-#define VERSION "0.6"
+#define VERSION "0.7"
 
 static const char *prog = "mag";
 static const char *root = "";                   /* MAG_ROOT without the trailing slash, "" is / */
 static const char *arch;
-static int dry, force;
+static int dry, force, yes;
 
 static void say(const char *fmt, ...)
 {
@@ -1644,7 +1644,7 @@ static int ed25519_ok(const unsigned char *sig, const unsigned char *pk, const c
 
 /* ---- the repos ---- */
 
-struct pkg { char *name, *ver, *desc, *csum, *deps, *prov, *size, *iif, *file, *sig, *mdeps, *base; int prio, repo; };
+struct pkg { char *name, *ver, *desc, *csum, *deps, *prov, *size, *isize, *iif, *file, *sig, *mdeps, *base; int prio, repo; };
 struct prov { char *key, *ver; struct pkg *p; };
 
 static struct pkg *pkgs;
@@ -1771,6 +1771,31 @@ static int download(const char *url, const char *file)
     return rc;
 }
 
+static void db_put_file(const char *f, const char *text);
+
+/* many at once when it is curl; what did not come is fetched again one by one where it is used */
+static void fetch_all(const struct list *urls, const struct list *files, const char *dir)
+{
+    const char *dl = downloader();
+    int k;
+    if (urls->n && !strncmp(dl, "curl ", 5) && !getenv("MAG_FETCH")) {
+        char *cfg = fmt("%s/fetch", dir), *cmd = xstrndup(dl, strlen(dl) - 3);
+        struct buf c = { 0 };
+        char *av[] = { "/bin/sh", "-c", "set -f; $0 --create-dirs --parallel --parallel-max 8 -K \"$1\"", cmd, cfg, NULL };
+        buf_add(&c, "", 0);
+        for (k = 0; k < urls->n; k++) {
+            char *s = fmt("url = \"%s\"\noutput = \"%s\"\n", urls->v[k], files->v[k]);
+            buf_add(&c, s, strlen(s));
+            free(s);
+        }
+        mkpath(dir, 0755);
+        db_put_file(cfg, (char *)c.p);
+        run(av);
+        unlink(cfg);
+        free(cfg); free(cmd); free(c.p);
+    } else for (k = 0; k < urls->n; k++) download(urls->v[k], files->v[k]);
+}
+
 /* a signed file starts with a gzip member holding .SIGN.RSA.key or .SIGN.RSA256.key, over the rest of the file */
 static int check_signed(const char *file)
 {
@@ -1844,6 +1869,7 @@ static void parse_index(char *t, int repo)
         case 'D': p.deps = line + 2; break;
         case 'p': p.prov = line + 2; break;
         case 'S': p.size = line + 2; break;
+        case 'I': p.isize = line + 2; break;
         case 'i': p.iif = line + 2; break;
         case 'k': p.prio = atoi(line + 2); break;
         case 'F': p.file = line + 2; break;
@@ -2738,7 +2764,7 @@ static void port_entry(struct buf *b, const char *dir, const char *port)
 static int sync_tree(int i)
 {
     char *dir = tree_dir(i), *repo = fmt("%s/REPO", dir), *tmp = fmt("%s/REPO.new", dir), *url = fmt("%s/REPO", repo_urls.v[i]), *idx = fmt("%s/INDEX", dir);
-    char *old = NULL, *t = NULL, *line, *next, *dl = (char *)downloader();
+    char *old = NULL, *t = NULL, *line, *next;
     struct list urls = { 0 }, files = { 0 }, keep = { 0 }, have = { 0 }, dirs = { 0 };
     struct buf b = { 0 }, r = { 0 };
     int bad = 0, k, lost = 0;
@@ -2763,21 +2789,7 @@ static int sync_tree(int i)
         else free(full);
     }
     if (urls.n) printf("==> %d files\n", urls.n);
-    if (urls.n && !strncmp(dl, "curl ", 5) && !getenv("MAG_FETCH")) {
-        char *cfg = fmt("%s/fetch", dir), *cmd = xstrndup(dl, strlen(dl) - 3);
-        struct buf c = { 0 };
-        char *av[] = { "/bin/sh", "-c", "set -f; $0 --create-dirs --parallel --parallel-max 8 -K \"$1\"", cmd, cfg, NULL };
-        buf_add(&c, "", 0);
-        for (k = 0; k < urls.n; k++) {
-            char *s = fmt("url = \"%s\"\noutput = \"%s\"\n", urls.v[k], files.v[k]);
-            buf_add(&c, s, strlen(s));
-            free(s);
-        }
-        db_put_file(cfg, (char *)c.p);
-        run(av);
-        unlink(cfg);
-        free(cfg); free(cmd); free(c.p);
-    } else for (k = 0; k < urls.n; k++) download(urls.v[k], files.v[k]);
+    fetch_all(&urls, &files, dir);
     for (k = 0; k < files.n; k++) lost += !exists(files.v[k]);
     if (lost) { say("%d files of %s did not come, mag update tries again", lost, repo_urls.v[i]); bad = 1; }
     free(t);
@@ -3742,8 +3754,8 @@ static void field(struct buf *b, int k, const char *v)
 
 static void pac_entry(struct buf *b, char *t)
 {
-    static const char *const keys[] = { "%NAME%", "%VERSION%", "%DESC%", "%FILENAME%", "%SHA256SUM%", "%PGPSIG%", "%ISIZE%", "%BASE%" };
-    char *line, *next, *key = "", *v[8] = { 0 };
+    static const char *const keys[] = { "%NAME%", "%VERSION%", "%DESC%", "%FILENAME%", "%SHA256SUM%", "%PGPSIG%", "%CSIZE%", "%BASE%", "%ISIZE%" };
+    char *line, *next, *key = "", *v[9] = { 0 };
     struct buf deps = { 0 }, prov = { 0 };
     int k;
     for (line = t; line; line = next) {
@@ -3751,15 +3763,15 @@ static void pac_entry(struct buf *b, char *t)
         if (next) *next++ = 0;
         if (*line == '%') { key = line; continue; }
         if (!*line) continue;
-        for (k = 0; k < 8 && strcmp(key, keys[k]); k++) {}
-        if (k < 8) { if (!v[k]) v[k] = line; }
+        for (k = 0; k < 9 && strcmp(key, keys[k]); k++) {}
+        if (k < 9) { if (!v[k]) v[k] = line; }
         else if (!strcmp(key, "%DEPENDS%")) { buf_add(&deps, " ", 1); buf_add(&deps, line, strlen(line)); }
         else if (!strcmp(key, "%CONFLICTS%")) { buf_add(&deps, " !", 2); buf_add(&deps, line, strlen(line)); }
         else if (!strcmp(key, "%PROVIDES%")) { buf_add(&prov, " ", 1); buf_add(&prov, line, strlen(line)); }
     }
     if (v[0] && v[1] && v[3] && v[4]) {
         field(b, 'P', v[0]); field(b, 'V', v[1]); field(b, 'T', v[2]); field(b, 'F', v[3]); field(b, 'C', v[4]);
-        field(b, 'G', v[5]); field(b, 'S', v[6]); field(b, 'B', v[7]);
+        field(b, 'G', v[5]); field(b, 'S', v[6]); field(b, 'B', v[7]); field(b, 'I', v[8]);
         if (deps.n) field(b, 'D', (char *)deps.p + 1);
         if (prov.n) field(b, 'p', (char *)prov.p + 1);
         buf_add(b, "\n", 1);
@@ -4440,6 +4452,43 @@ static void pending_load(void)
     free(t); free(f);
 }
 
+static const char *bold(void) { return isatty(1) ? "\033[1m" : ""; }
+static const char *plain(void) { return isatty(1) ? "\033[0m" : ""; }
+
+static const char *hsize(double b)
+{
+    static char s[2][32];
+    static int k;
+    const char *u[] = { "B", "KiB", "MiB", "GiB" };
+    int i = 0;
+    for (; b >= 1024 && i < 3; i++) b /= 1024;
+    k ^= 1;
+    snprintf(s[k], sizeof s[k], i ? "%.1f %s" : "%.0f %s", b, u[i]);
+    return s[k];
+}
+
+static char *repo_label(int i)
+{
+    const char *u = repo_urls.v[i], *s;
+    if (kinds[i] == PACMAN) return pac_name(i);
+    if (kinds[i] == AUR) return xstrdup("aur");
+    s = strrchr(u, '/');
+    return xstrdup(s && s[1] ? s + 1 : u);
+}
+
+/* y/n on a terminal; -y or MAG_YES says yes without asking */
+static int ask(const char *what)
+{
+    char c[16];
+    ssize_t n;
+    const char *e = getenv("MAG_YES");
+    if (yes || (e && *e) || !isatty(0)) return 1;
+    printf("%s? [Y/n] ", what);
+    fflush(stdout);
+    if ((n = read(0, c, sizeof c - 1)) <= 0) { putchar('\n'); return 0; }
+    return *c == '\n' || *c == 'y' || *c == 'Y';
+}
+
 static int apply(const struct list *order, const struct list *want)
 {
     int i;
@@ -4453,15 +4502,53 @@ static int apply(const struct list *order, const struct list *want)
         }
     }
     if (!order->n) return 0;
-    printf("will install:");
-    for (i = 0; i < order->n; i++) printf(" %s%s", order->v[i], BUILT(kinds[newest(order->v[i])->repo]) ? " (built here)" : "");
-    putchar('\n');
+    {
+        double dl = 0, in = 0;
+        int w = 0, wv = 0;
+        for (i = 0; i < order->n; i++) {
+            struct pkg *p = newest(order->v[i]);
+            if ((int)strlen(p->name) > w) w = strlen(p->name);
+            if ((int)strlen(p->ver) > wv) wv = strlen(p->ver);
+        }
+        printf("%sinstall (%d)%s\n", bold(), order->n, plain());
+        for (i = 0; i < order->n; i++) {
+            struct pkg *p = newest(order->v[i]);
+            char *old = db_get(p->name, "version"), *from = repo_label(p->repo);
+            printf("  %-*s  %-*s  %s", w, p->name, wv, p->ver, from);
+            if (BUILT(kinds[p->repo])) printf(", built here");
+            if (old) printf(", was %s", old);
+            putchar('\n');
+            if (!BUILT(kinds[p->repo]) && p->size) dl += atof(p->size);
+            if (p->isize) in += atof(p->isize);
+            free(old); free(from);
+        }
+        printf("\ndownload %s", hsize(dl));
+        printf(", installed %s\n", hsize(in));
+    }
     if (dry) return 0;
     if (geteuid()) die("this needs root");
+    if (!ask("install")) return 1;
     {
         char *f = fmt("%s/etc/mag/arch", root);
         if (!exists(f)) { mkparent(f); db_put_file(f, arch); }
         free(f);
+    }
+    {
+        struct list urls = { 0 }, files = { 0 };
+        char *dir = NULL;
+        for (i = 0; i < order->n; i++) {
+            struct pkg *p = newest(order->v[i]);
+            char *file, *base;
+            if (BUILT(kinds[p->repo]) || exists(file = pkg_file(p))) continue;
+            base = repo_base(p->repo);
+            if (!dir) { dir = xstrdup(file); *strrchr(dir, '/') = 0; }
+            push(&urls, kinds[p->repo] == PACMAN ? fmt("%s/%s", base, p->file) : fmt("%s/%s-%s.apk", base, p->name, p->ver));
+            push(&files, file);
+            if (kinds[p->repo] == PACMAN && !p->sig) { push(&urls, fmt("%s/%s.sig", base, p->file)); push(&files, fmt("%s.sig", file)); }
+            free(base);
+        }
+        if (urls.n > 1) { printf("==> fetching %d files\n", urls.n); fetch_all(&urls, &files, dir); }
+        list_free(&urls); list_free(&files); free(dir);
     }
     for (i = 0; i < order->n; i++) {
         struct pkg *p = newest(order->v[i]);
@@ -4577,6 +4664,12 @@ static int cmd_remove(int n, char **names)
         for (k = 0; k < files.n; k++) push(&did_files, fmt("R %s", files.v[k]));
         push(&did_pkgs, fmt("R %s", names[i]));
         list_free(&files);
+    }
+    if (!dry) {
+        printf("%sremove (%d)%s\n ", bold(), n, plain());
+        for (i = 0; i < n; i++) printf(" %s", names[i]);
+        putchar('\n');
+        if (!ask("remove")) return 1;
     }
     run_hooks(0);
     for (i = 0; i < n; i++) {
@@ -4739,7 +4832,7 @@ static int cmd_fetch(int n, char **names)
 
 static void usage(void)
 {
-    puts("Usage: mag [-nf] COMMAND [PACKAGE]...\n"
+    puts("Usage: mag [-nfy] COMMAND [PACKAGE]...\n"
          "\n"
          "  update            get the index of every repo, checked against the keys\n"
          "  install PKG...    install packages and what they need\n"
@@ -4756,6 +4849,7 @@ static void usage(void)
          "  fetch PKG...      only download them\n"
          "\n"
          "  -n  only say what would happen    -f  go on when files clash or something needs the package\n"
+         "  -y  do not ask before installing or removing\n"
          "\n"
          "/etc/mag/repos has one repo url a line, /etc/mag/keys the public keys they are signed with, /etc/mag/arch\n"
          "which builds to get (written on the first install, the machine's own if it is not there). A line \"crux URL\" is a\n"
@@ -4782,7 +4876,7 @@ int main(int argc, char **argv)
         if (!strcmp(argv[i], "--help")) { usage(); return 0; }
         if (!strcmp(argv[i], "--version")) { puts("mag " VERSION); return 0; }
         for (o = argv[i] + 1; *o; o++) {
-            if (*o == 'n') dry = 1; else if (*o == 'f') force = 1;
+            if (*o == 'n') dry = 1; else if (*o == 'f') force = 1; else if (*o == 'y') yes = 1;
             else { say("unknown option -%c", *o); return 1; }
         }
     }

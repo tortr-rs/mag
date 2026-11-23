@@ -10,7 +10,7 @@ download command (curl, else wget, else ftp).
     cc -DLIBC -static mag.c  builds it on a libc, for any other cpu
 
     mag update               gets the index of every repo
-    mag install tmux         tmux and what it needs
+    mag install tmux         tmux and what it needs, after a y
     mag remove tmux          mag help has the rest
 
 `/etc/mag/repos` has one repo a line (the url above the arch directory), `/etc/mag/keys` the public keys the
