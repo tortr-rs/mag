@@ -22,7 +22,7 @@
 #include <sys/wait.h>
 #endif
 
-#define VERSION "0.7.2"
+#define VERSION "0.7.3"
 
 static const char *prog = "mag";
 static const char *root = "";                   /* MAG_ROOT without the trailing slash, "" is / */
@@ -4166,11 +4166,26 @@ static int owner_here(const char *rel, struct stat *st)
     return 0;
 }
 
+/* apk: two packages giving the same versioned name (cmd:ld.lld=..) can't both be there, the new one replaces the old, as lld23 does lld22 */
+static int replaces(const struct pkg *p, const char *other)
+{
+    char *t = db_get(other, "provides");
+    struct list a = words(p->prov ? p->prov : ""), b = words(t ? t : "");
+    int i, j, hit = 0;
+    for (i = 0; i < a.n && !hit; i++) {
+        size_t n = strcspn(a.v[i], "=");
+        if (!a.v[i][n]) continue;
+        for (j = 0; j < b.n && !hit; j++) hit = !strncmp(a.v[i], b.v[j], n + 1);
+    }
+    list_free(&a); list_free(&b); free(t);
+    return hit;
+}
+
 static void install_one(struct pkg *p, int explicit, const struct list *planned)
 {
     static const char *const scripts[] = { "pre-install", "post-install", "pre-upgrade", "post-upgrade", "pre-deinstall", "post-deinstall", "trigger" };
     char *file = pkg_file(p), *stage = fmt("%s/var/tmp/mag/%s", root, p->name), *oldver = db_get(p->name, "version"), *trig;
-    struct list files = { 0 }, dirs = { 0 }, old, gone = { 0 }, deps = { 0 }, w, v = { 0 }, pr = { 0 }, sums, newsums = { 0 };
+    struct list files = { 0 }, dirs = { 0 }, old, gone = { 0 }, deps = { 0 }, w, v = { 0 }, pr = { 0 }, sums, newsums = { 0 }, takes = { 0 };
     struct tar ctl;
     int i, bad = 0, port = BUILT(kinds[p->repo]);
     int (*un)(const struct pkg *, const char *, const char *, struct tar *) = kinds[p->repo] == PACMAN ? pac_unpack : unpack;
@@ -4197,7 +4212,8 @@ static void install_one(struct pkg *p, int explicit, const struct list *planned)
         const char *o = owner_of(files.v[i]);
         char *full = fmt("%s/%s", root, files.v[i]);
         /* a package upgraded in the same run may be letting go of the file, as chamesle-base did of /sbin/service */
-        if (o && strcmp(o, p->name) && !has(planned, o)) { if (bad < 5) say("%s wants /%s, which %s has", p->name, files.v[i], o); bad++; }
+        if (o && strcmp(o, p->name) && !has(planned, o) && (has(&takes, o) || (kinds[p->repo] == APK && replaces(p, o)))) { if (!has(&takes, o)) push(&takes, xstrdup(o)); }
+        else if (o && strcmp(o, p->name) && !has(planned, o)) { if (bad < 5) say("%s wants /%s, which %s has", p->name, files.v[i], o); bad++; }
         else if (!o && exists(full) && strncmp(files.v[i], "etc/", 4) && !(lstat(full, &st) == 0 && S_ISLNK(st.st_mode))) {
             char *from = fmt("%s/%s", stage, files.v[i]);
             if (!same_file(from, full)) { if (bad < 5) say("%s wants /%s, which is there already and is different", p->name, files.v[i]); bad++; }
@@ -4308,6 +4324,17 @@ static void install_one(struct pkg *p, int explicit, const struct list *planned)
     else { char *d = dbdir(p->name), *f = fmt("%s/port", d); unlink(f); free(d); free(f); }
     free(trig);
     tar_free(&ctl);
+    for (i = 0; i < takes.n; i++) {
+        struct list qf = db_read(takes.v[i], "files"), left = { 0 };
+        char *d = dbdir(takes.v[i]);
+        int k;
+        for (k = 0; k < qf.n; k++) if (!has(&files, qf.v[k])) push(&left, xstrdup(qf.v[k]));
+        delete_files(&left);
+        rmtree(d);
+        printf("==> %s replaced %s\n", p->name, takes.v[i]);
+        list_free(&qf); list_free(&left); free(d);
+    }
+    list_free(&takes);
     if (oldver) script_or_later(p->name, "post-upgrade", p->ver, oldver);
     else script_or_later(p->name, "post-install", p->ver, NULL);
     printf("==> installed %s %s%s%s\n", p->name, p->ver, oldver ? ", was " : "", oldver ? oldver : "");
