@@ -16,7 +16,11 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <netdb.h>
+#include <strings.h>
+#include <sys/socket.h>
 #include <sys/stat.h>
+#include <sys/time.h>
 #include <sys/sysmacros.h>
 #include <sys/utsname.h>
 #include <sys/wait.h>
@@ -1758,13 +1762,125 @@ static const char *downloader(void)
     return "curl -fsSL --retry 3 --retry-all-errors -o";
 }
 
+static int fetch_ext(const char *url, const char *file)
+{
+    char *av[] = { "/bin/sh", "-c", "set -f; $0 \"$1\" \"$2\"", (char *)downloader(), (char *)file, (char *)url, NULL };
+    return run(av);
+}
+
+/* plain http is fetched here, no curl needed. https goes to the downloader */
+struct hconn { int fd, p, n; char b[16384]; };
+
+static int h_fill(struct hconn *c)
+{
+    ssize_t r;
+    if (c->p < c->n) return 1;
+    do r = read(c->fd, c->b, sizeof c->b); while (r < 0 && errno == EINTR);
+    if (r <= 0) return 0;
+    c->p = 0;
+    c->n = r;
+    return 1;
+}
+
+static int h_line(struct hconn *c, char *s, int max)
+{
+    int k = 0;
+    while (h_fill(c)) {
+        char ch = c->b[c->p++];
+        if (ch == '\n') { if (k && s[k - 1] == '\r') k--; s[k] = 0; return 1; }
+        if (k < max - 1) s[k++] = ch;
+    }
+    return 0;
+}
+
+/* n bytes to out, or everything up to the end when n < 0 */
+static int h_copy(struct hconn *c, int out, long long n)
+{
+    while (n && h_fill(c)) {
+        int k = c->n - c->p, o;
+        ssize_t w;
+        if (n > 0 && k > n) k = n;
+        for (o = 0; o < k; o += w)
+            if ((w = write(out, c->b + c->p + o, k - o)) <= 0) return -1;
+        c->p += k;
+        if (n > 0) n -= k;
+    }
+    return n > 0 ? -1 : 0;
+}
+
+static int http_get(const char *url, const char *file, int hops)
+{
+    struct hconn *c = xmalloc(sizeof *c);
+    struct addrinfo hints, *ai, *a;
+    struct timeval tv = { 30, 0 };
+    const char *h = url + 7, *path = strchr(h, '/');
+    char host[256], port[8] = "80", line[4096], *loc = NULL, *req, *col;
+    size_t hn = path ? (size_t)(path - h) : strlen(h);
+    int out, rc = 1, code = 0, chunked = 0;
+    long long len = -1;
+    c->fd = -1;
+    c->p = c->n = 0;
+    if (!path) path = "/";
+    if (hn >= sizeof host) goto done;
+    memcpy(host, h, hn);
+    host[hn] = 0;
+    if ((col = strchr(host, ':'))) { *col++ = 0; snprintf(port, sizeof port, "%s", col); }
+    memset(&hints, 0, sizeof hints);
+    hints.ai_family = AF_UNSPEC;
+    hints.ai_socktype = SOCK_STREAM;
+    if (getaddrinfo(host, port, &hints, &ai)) { say("cannot find %s", host); goto done; }
+    for (a = ai; a; a = a->ai_next) {
+        if ((c->fd = socket(a->ai_family, SOCK_STREAM, 0)) < 0) continue;
+        setsockopt(c->fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
+        if (!connect(c->fd, a->ai_addr, a->ai_addrlen)) break;
+        close(c->fd);
+        c->fd = -1;
+    }
+    freeaddrinfo(ai);
+    if (c->fd < 0) { say("cannot connect to %s", host); goto done; }
+    req = fmt("GET %s HTTP/1.1\r\nHost: %.*s\r\nUser-Agent: mag\r\nConnection: close\r\n\r\n", path, (int)hn, h);
+    if (write(c->fd, req, strlen(req)) != (ssize_t)strlen(req)) { free(req); goto done; }
+    free(req);
+    if (!h_line(c, line, sizeof line) || sscanf(line, "HTTP/%*s %d", &code) != 1) goto done;
+    while (h_line(c, line, sizeof line) && *line) {
+        char *v = strchr(line, ':');
+        if (!v) continue;
+        for (*v++ = 0; *v == ' ' || *v == '\t'; v++) {}
+        if (!strcasecmp(line, "content-length")) len = strtoll(v, NULL, 10);
+        else if (!strcasecmp(line, "transfer-encoding") && strstr(v, "chunked")) chunked = 1;
+        else if (!strcasecmp(line, "location")) { free(loc); loc = xstrdup(v); }
+    }
+    if (code / 100 == 3 && loc && hops < 5) {
+        char *to = *loc == '/' ? fmt("http://%.*s%s", (int)hn, h, loc) : xstrdup(loc);
+        close(c->fd);
+        c->fd = -1;
+        rc = strncmp(to, "http://", 7) ? fetch_ext(to, file) : http_get(to, file, hops + 1);
+        free(to);
+        goto done;
+    }
+    if (code != 200) { say("%s: http %d", url, code); goto done; }
+    if ((out = open(file, O_WRONLY | O_CREAT | O_TRUNC, 0644)) < 0) goto done;
+    if (!chunked) rc = h_copy(c, out, len) ? 1 : 0;
+    else for (;;) {
+        long long k;
+        if (!h_line(c, line, sizeof line)) break;
+        if (!(k = strtoll(line, NULL, 16))) { rc = 0; break; }
+        if (h_copy(c, out, k) || !h_line(c, line, sizeof line)) break;
+    }
+    if (close(out) < 0) rc = 1;
+done:
+    if (c->fd >= 0) close(c->fd);
+    free(loc);
+    free(c);
+    return rc;
+}
+
 static int download(const char *url, const char *file)
 {
     char *part = fmt("%s.part", file);
-    char *av[] = { "/bin/sh", "-c", "set -f; $0 \"$1\" \"$2\"", (char *)downloader(), part, (char *)url, NULL };
     int rc;
     mkparent(file);
-    rc = run(av);
+    rc = !strncmp(url, "http://", 7) && !getenv("MAG_FETCH") ? http_get(url, part, 0) : fetch_ext(url, part);
     if (!rc && rename(part, file) < 0) rc = 1;
     if (rc) unlink(part);
     free(part);
@@ -4909,7 +5025,7 @@ static void usage(void)
          "packages are checked against the OpenPGP keyrings in /etc/mag/keys (*.gpg) and /usr/share/pacman/keyrings, and the\n"
          "hooks in /usr/share/libalpm/hooks run after them. A name in two pacman repos comes from the first one, as in pacman.\n"
          "\"aur https://aur.archlinux.org\" is the AUR: a PKGBUILD is built by makepkg as nobody in /var/cache/mag/aur.\n"
-         "MAG_ROOT installs somewhere else than /, MAG_ARCH overrides the arch, MAG_FETCH is the download command, which gets a file and an url (curl, else wget, else ftp)");
+         "MAG_ROOT installs somewhere else than /, MAG_ARCH overrides the arch, MAG_FETCH is the download command, which gets a file and an url (curl, else wget, else ftp; plain http:// mag fetches itself)");
 }
 
 int main(int argc, char **argv)

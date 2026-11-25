@@ -1120,8 +1120,8 @@ int chroot(const char *path)
 #endif
 #define major(d) ((unsigned)((((d) >> 32) & 0xfffff000) | (((d) >> 8) & 0xfff)))
 #define minor(d) ((unsigned)((((d) >> 12) & 0xffffff00) | ((d) & 0xff)))
-#define makedev(ma, mi) ((dev_t)((((unsigned long)(ma) & 0xfffff000UL) << 32) | (((unsigned long)(ma) & 0xfffUL) << 8) | \
-                                 (((unsigned long)(mi) & 0xffffff00UL) << 12) | ((unsigned long)(mi) & 0xffUL)))
+#define makedev(ma, mi) ((dev_t)((((unsigned long long)(ma) & 0xfffff000ULL) << 32) | (((unsigned long long)(ma) & 0xfffULL) << 8) | \
+                                 (((unsigned long long)(mi) & 0xffffff00ULL) << 12) | ((unsigned long long)(mi) & 0xffULL)))
 
 /* ---- characters ---- */
 int isdigit(int c)
