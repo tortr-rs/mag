@@ -3,7 +3,7 @@ mag
 
 The package manager, one C file. It installs prebuilt packages from apk and pacman repos: it reads their signed
 index, works out what a package needs, checks every download against the index and its signature, and puts
-the files in place. gzip, zstd, tar, rsa, ed25519 and OpenPGP are in mag itself, the only thing it runs is a
+the files in place. gzip, zstd, tar, rsa, ed25519, OpenPGP and plain http are in mag itself; for https it runs a
 download command (curl, else wget, else ftp).
 
     ./build.sh               builds ./mag on c.h (x86_64)
