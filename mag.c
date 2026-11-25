@@ -1,7 +1,7 @@
 /* mag: the package manager, one C file on c.h. it installs prebuilt packages from apk repos, and builds
  * CRUX ports: the repos are listed in /etc/mag/repos, their keys are in /etc/mag/keys. it does its own gzip,
  * tar, rsa and ed25519, so all it needs from the system is a download command, and bash for ports */
-#if defined(__x86_64__) && !defined(LIBC)
+#if (defined(__x86_64__) || defined(__i386__)) && !defined(LIBC)
 #include "c.h"
 #else
 #define _GNU_SOURCE
