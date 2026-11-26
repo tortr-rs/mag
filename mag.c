@@ -1769,7 +1769,22 @@ static int fetch_ext(const char *url, const char *file)
 }
 
 /* plain http is fetched here, no curl needed. https goes to the downloader */
-struct hconn { int fd, p, n; char b[16384]; };
+static const char *hsize(double b);
+
+struct hconn { int fd, p, n; const char *name; long long total, got; char b[16384]; };
+
+/* one line that rewrites itself: the name, how far, and the size when the server gave one */
+static void progress(struct hconn *c)
+{
+    if (!isatty(2)) return;
+    if (c->total > 0) fprintf(stderr, "\r  %-30s %3d%%  %s", c->name, (int)(c->got * 100 / c->total), hsize(c->got));
+    else fprintf(stderr, "\r  %-30s %s", c->name, hsize(c->got));
+}
+
+static void progress_done(struct hconn *c)
+{
+    if (isatty(2) && c->got) fprintf(stderr, "\r%*s\r", (int)strlen(c->name) + 24, "");
+}
 
 static int h_fill(struct hconn *c)
 {
@@ -1804,11 +1819,13 @@ static int h_copy(struct hconn *c, int out, long long n)
             if ((w = write(out, c->b + c->p + o, k - o)) <= 0) return -1;
         c->p += k;
         if (n > 0) n -= k;
+        c->got += k;
+        progress(c);
     }
     return n > 0 ? -1 : 0;
 }
 
-static int http_get(const char *url, const char *file, int hops)
+static int http_get(const char *url, const char *file, const char *name, int hops)
 {
     struct hconn *c = xmalloc(sizeof *c);
     struct addrinfo hints, *ai, *a;
@@ -1820,6 +1837,9 @@ static int http_get(const char *url, const char *file, int hops)
     long long len = -1;
     c->fd = -1;
     c->p = c->n = 0;
+    c->name = name;
+    c->total = -1;
+    c->got = 0;
     if (!path) path = "/";
     if (hn >= sizeof host) goto done;
     memcpy(host, h, hn);
@@ -1854,12 +1874,13 @@ static int http_get(const char *url, const char *file, int hops)
         char *to = *loc == '/' ? fmt("http://%.*s%s", (int)hn, h, loc) : xstrdup(loc);
         close(c->fd);
         c->fd = -1;
-        rc = strncmp(to, "http://", 7) ? fetch_ext(to, file) : http_get(to, file, hops + 1);
+        rc = strncmp(to, "http://", 7) ? fetch_ext(to, file) : http_get(to, file, name, hops + 1);
         free(to);
         goto done;
     }
     if (code != 200) { say("%s: http %d", url, code); goto done; }
     if ((out = open(file, O_WRONLY | O_CREAT | O_TRUNC, 0644)) < 0) goto done;
+    c->total = chunked ? -1 : len;
     if (!chunked) rc = h_copy(c, out, len) ? 1 : 0;
     else for (;;) {
         long long k;
@@ -1867,6 +1888,7 @@ static int http_get(const char *url, const char *file, int hops)
         if (!(k = strtoll(line, NULL, 16))) { rc = 0; break; }
         if (h_copy(c, out, k) || !h_line(c, line, sizeof line)) break;
     }
+    progress_done(c);
     if (close(out) < 0) rc = 1;
 done:
     if (c->fd >= 0) close(c->fd);
@@ -1877,10 +1899,14 @@ done:
 
 static int download(const char *url, const char *file)
 {
-    char *part = fmt("%s.part", file);
+    char *part = fmt("%s.part", file), *name;
+    const char *s = strrchr(url, '/');
     int rc;
     mkparent(file);
-    rc = !strncmp(url, "http://", 7) && !getenv("MAG_FETCH") ? http_get(url, part, 0) : fetch_ext(url, part);
+    name = xstrdup(s && s[1] ? s + 1 : url);       /* the last bit of the url reads better than the temp file */
+    name[strcspn(name, "?")] = 0;
+    rc = !strncmp(url, "http://", 7) && !getenv("MAG_FETCH") ? http_get(url, part, name, 0) : fetch_ext(url, part);
+    free(name);
     if (!rc && rename(part, file) < 0) rc = 1;
     if (rc) unlink(part);
     free(part);
