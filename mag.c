@@ -1717,6 +1717,16 @@ static void load_repos(void)
 
 static char *repo_base(int i) { return fmt("%s/%s", repo_urls.v[i], arch); }
 
+/* Arch32 keeps the arch in the url (.../i686/core) and the db and packages right there; mainline Arch ends in /os
+ * and the arch goes after it. a pacman url that does not end in /os is the flat Arch32 kind */
+static int pac_flat(int i)
+{
+    const char *u = repo_urls.v[i];
+    size_t l = strlen(u);
+    return kinds[i] == PACMAN && !(l >= 3 && !strcmp(u + l - 3, "/os"));
+}
+static char *pac_base(int i) { return pac_flat(i) ? xstrdup(repo_urls.v[i]) : repo_base(i); }
+
 static char *flat(int i)
 {
     char *u = xstrdup(repo_urls.v[i]), *s;
@@ -3923,7 +3933,7 @@ static void pac_entry(struct buf *b, char *t)
 
 static int sync_pacman(int i)
 {
-    char *name = pac_name(i), *base = repo_base(i), *url = fmt("%s/%s.db", base, name), *d = tree_dir(i), *db = fmt("%s/%s.db", d, name), *ix = fmt("%s/INDEX", d), *tmp = fmt("%s.new", ix);
+    char *name = pac_name(i), *base = pac_base(i), *url = fmt("%s/%s.db", base, name), *d = tree_dir(i), *db = fmt("%s/%s.db", d, name), *ix = fmt("%s/INDEX", d), *tmp = fmt("%s.new", ix);
     struct in *r = xmalloc(sizeof *r);
     struct tar t;
     struct buf b = { 0 };
@@ -3976,7 +3986,7 @@ static int pac_unpack(const struct pkg *p, const char *file, const char *stage, 
         n = unbase64(p->sig, sig);
     } else {
         /* the database left it out: the .sig next to the package */
-        char *base = repo_base(p->repo), *url = fmt("%s/%s.sig", base, p->file), *sf = fmt("%s.sig", file);
+        char *base = pac_base(p->repo), *url = fmt("%s/%s.sig", base, p->file), *sf = fmt("%s.sig", file);
         if (!exists(sf) && download(url, sf)) { say("%s is not signed", p->name); free(base); free(url); free(sf); return -1; }
         sig = (unsigned char *)slurp(sf, &n);
         free(base); free(url); free(sf);
@@ -4249,7 +4259,7 @@ static struct list changed_dirs;
 
 static void fetch_pkg(const struct pkg *p, const char *file)
 {
-    char *base = repo_base(p->repo), *url = kinds[p->repo] == PACMAN ? fmt("%s/%s", base, p->file) : fmt("%s/%s-%s.apk", base, p->name, p->ver);
+    char *base = pac_base(p->repo), *url = kinds[p->repo] == PACMAN ? fmt("%s/%s", base, p->file) : fmt("%s/%s-%s.apk", base, p->name, p->ver);
     printf("==> fetching %s\n", url);
     if (download(url, file)) die("could not fetch %s", url);
     free(base); free(url);
@@ -4729,7 +4739,7 @@ static int apply(const struct list *order, const struct list *want)
             struct pkg *p = newest(order->v[i]);
             char *file, *base;
             if (BUILT(kinds[p->repo]) || exists(file = pkg_file(p))) continue;
-            base = repo_base(p->repo);
+            base = pac_base(p->repo);
             if (!dir) { dir = xstrdup(file); *strrchr(dir, '/') = 0; }
             push(&urls, kinds[p->repo] == PACMAN ? fmt("%s/%s", base, p->file) : fmt("%s/%s-%s.apk", base, p->name, p->ver));
             push(&files, file);
@@ -5011,7 +5021,7 @@ static int cmd_fetch(int n, char **names)
         char *file, *base, *url;
         if (!p) die("%s is in no repo", names[i]);
         if (BUILT(kinds[p->repo])) { printf("%s comes from a port tree, it is built and not fetched\n", p->name); continue; }
-        file = pkg_file(p); base = repo_base(p->repo); url = fmt("%s/%s-%s.apk", base, p->name, p->ver);
+        file = pkg_file(p); base = pac_base(p->repo); url = fmt("%s/%s-%s.apk", base, p->name, p->ver);
         printf("==> fetching %s\n", url);
         if (download(url, file)) die("could not fetch %s", url);
         free(file); free(base); free(url);
