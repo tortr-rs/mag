@@ -26,7 +26,7 @@
 #include <sys/wait.h>
 #endif
 
-#define VERSION "0.7.3"
+#define VERSION "0.7.4"
 
 static const char *prog = "mag";
 static const char *root = "";                   /* MAG_ROOT without the trailing slash, "" is / */
