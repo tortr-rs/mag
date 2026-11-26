@@ -1933,7 +1933,9 @@ static void fetch_all(const struct list *urls, const struct list *files, const c
     if (urls->n && !strncmp(dl, "curl ", 5) && !getenv("MAG_FETCH")) {
         char *cfg = fmt("%s/fetch", dir), *cmd = xstrndup(dl, strlen(dl) - 3);
         struct buf c = { 0 };
-        char *av[] = { "/bin/sh", "-c", "set -f; $0 --create-dirs --parallel --parallel-max 8 -K \"$1\"", cmd, cfg, NULL };
+        /* no --parallel: some curl versions cross the outputs of parallel transfers in a -K config, so a package
+         * lands under another's name and fails its checksum. one kept-alive connection is reliable and fast enough */
+        char *av[] = { "/bin/sh", "-c", "set -f; $0 --create-dirs -K \"$1\"", cmd, cfg, NULL };
         buf_add(&c, "", 0);
         for (k = 0; k < urls->n; k++) {
             char *s = fmt("url = \"%s\"\noutput = \"%s\"\n", urls->v[k], files->v[k]);
@@ -4347,13 +4349,15 @@ static void install_one(struct pkg *p, int explicit, const struct list *planned)
         if (kinds[p->repo] == AUR) build_aur(p, stage, &ctl);
         else if (kinds[p->repo] == CRUX) build_port(p, stage); else build_tree(p, stage);
     } else {
-        int fresh = !exists(file);
-        if (fresh) fetch_pkg(p, file);
+        if (!exists(file)) fetch_pkg(p, file);
         if (un(p, file, stage, &ctl)) {
-            unlink(file);
-            if (fresh) die("not installing %s", p->name);
+            /* a download that came down wrong (a flaky link, a proxy) gets one clean retry before we give up;
+             * the detached pacman .sig is cached next to it, so drop that too or the stale one is reused */
+            char *sf = fmt("%s.sig", file);
+            unlink(file); unlink(sf);
             fetch_pkg(p, file);
-            if (un(p, file, stage, &ctl)) { unlink(file); die("not installing %s", p->name); }
+            if (un(p, file, stage, &ctl)) { unlink(file); unlink(sf); die("not installing %s", p->name); }
+            free(sf);
         }
     }
     walk(stage, "", &files, &dirs);
